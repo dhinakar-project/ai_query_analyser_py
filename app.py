@@ -1,5 +1,6 @@
 """AI-Based Customer Query Analyzer - Streamlit Application."""
 
+import traceback
 import time
 
 import streamlit as st
@@ -334,6 +335,7 @@ def main():
                 st.error(f"🚫 Configuration Error: {str(e)}")
                 st.info("💡 Please make sure your `.env` file contains a valid `GEMINI_API_KEY`.")
             except Exception as e:
+                traceback.print_exc()
                 st.error(f"🚫 An error occurred: {str(e)}")
     
     if st.session_state.history:
