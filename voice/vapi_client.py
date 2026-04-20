@@ -167,17 +167,37 @@ class VapiClient:
 
         return self._request_with_retry("POST", "/call/phone", json=payload)
 
-    def start_web_call(self, assistant_id: str) -> Dict[str, Any]:
+    def start_web_call(self, assistant_id: str, public_key: str = None) -> Dict[str, Any]:
         """Start an in-browser web call.
 
         Args:
             assistant_id: Assistant ID to use
+            public_key: Vapi public key (from VAPI_PUBLIC_KEY env var)
 
         Returns:
             Call configuration dict with join URL
         """
-        payload = {"assistantId": assistant_id}
-        return self._request_with_retry("POST", "/call/web", json=payload)
+        public_key = public_key or os.getenv("VAPI_PUBLIC_KEY")
+        if not public_key:
+            raise VapiError("VAPI_PUBLIC_KEY not found. Add it to your .env file.")
+
+        response = httpx.post(
+            f"{self.BASE_URL}/call/web",
+            headers={
+                "Authorization": f"Bearer {public_key}",
+                "Content-Type": "application/json",
+            },
+            json={"assistantId": assistant_id},
+            timeout=30.0,
+        )
+        if response.status_code >= 400:
+            error_body = response.json() if response.content else {}
+            raise VapiError(
+                error_body.get("message", "API error"),
+                status_code=response.status_code,
+                response=error_body
+            )
+        return response.json()
 
     def get_call(self, call_id: str) -> Dict[str, Any]:
         """Get call details.

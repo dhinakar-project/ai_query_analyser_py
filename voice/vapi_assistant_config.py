@@ -18,10 +18,10 @@ Keep responses brief (2-3 sentences max) since this is a voice call."""
 def build_customer_support_assistant_config(
     name: str = "AI Query Analyzer Voice Agent",
     model_provider: str = "google",
-    model: str = "gemini-2.0-flash",
+    model: str = "gemini-1.5-flash",
     temperature: float = 0.4,
     voice_provider: str = "vapi",
-    voice_id: str = "听到",
+    voice_id: str = "Elliot",
     transcriber_provider: str = "deepgram",
     transcriber_model: str = "nova-2",
     first_message: str = "Hello! I'm your AI support agent. How can I help you today?",
@@ -51,8 +51,8 @@ def build_customer_support_assistant_config(
             "temperature": temperature,
         },
         "voice": {
-            "provider": voice_provider,
-            "voiceId": voice_id,
+            "provider": "vapi",
+            "voiceId": "Elliot",
         },
         "transcriber": {
             "provider": transcriber_provider,

@@ -690,7 +690,8 @@ def render_voice_agent_tab() -> None:
                 if st.button("🔴 Start Web Call", use_container_width=True):
                     try:
                         client = st.session_state.vapi_client
-                        response = client.start_web_call(st.session_state.voice_assistant_id)
+                        public_key = os.getenv("VAPI_PUBLIC_KEY")
+                        response = client.start_web_call(st.session_state.voice_assistant_id, public_key)
                         st.session_state.active_call_id = response.get("id")
                         join_url = response.get("joinUrl")
                         if join_url:
