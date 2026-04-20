@@ -625,6 +625,133 @@ def render_analyzer_tab() -> None:
                 )
 
 
+def render_voice_agent_tab() -> None:
+    """Render the Voice Agent tab for Vapi integration."""
+    import os
+    from typing import Optional, List, Dict, Any
+
+    st.markdown("### 🎤 Voice Agent")
+    st.markdown("Interact with the AI support agent via voice call.")
+
+    vapi_key = os.getenv("VAPI_API_KEY")
+
+    if not vapi_key:
+        st.warning("⚠️ VAPI_API_KEY not set. Add it to your .env file.")
+        st.markdown("""
+        **Setup:**
+        1. Get a Vapi API key from https://dashboard.vapi.ai
+        2. Add `VAPI_API_KEY=your_key` to `.env`
+        3. Restart the app
+        """)
+        return
+
+    from voice.vapi_client import VapiClient, VapiError
+    from voice.vapi_assistant_config import build_customer_support_assistant_config
+
+    if "vapi_client" not in st.session_state:
+        try:
+            st.session_state.vapi_client = VapiClient()
+        except VapiError as e:
+            st.error(f"Failed to initialize Vapi client: {e}")
+            return
+
+    if "voice_assistant_id" not in st.session_state:
+        st.session_state.voice_assistant_id = None
+
+    if "active_call_id" not in st.session_state:
+        st.session_state.active_call_id = None
+
+    col1, col2 = st.columns([2, 1])
+
+    with col1:
+        st.markdown("#### 📱 Setup")
+        with st.expander("Assistant Configuration", expanded=True):
+            assistant_name = st.text_input("Assistant Name", "AI Query Analyzer Voice")
+            phone_number = st.text_input("Phone Number (for outbound)", placeholder="+1234567890")
+
+            if st.button("🟢 Create/Update Assistant", use_container_width=True):
+                try:
+                    client = st.session_state.vapi_client
+                    config = build_customer_support_assistant_config(name=assistant_name)
+                    response = client.create_assistant(config)
+                    st.session_state.voice_assistant_id = response.get("id")
+                    st.success(f"✅ Assistant created: `{st.session_state.voice_assistant_id}`")
+                except VapiError as e:
+                    st.error(f"Failed to create assistant: {e}")
+
+        if st.session_state.voice_assistant_id:
+            st.markdown(f"**Assistant ID:** `{st.session_state.voice_assistant_id}`")
+
+    with col2:
+        st.markdown("#### 📞 Call Controls")
+        if st.session_state.voice_assistant_id:
+            call_cols = st.columns(2)
+            with call_cols[0]:
+                if st.button("🔴 Start Web Call", use_container_width=True):
+                    try:
+                        client = st.session_state.vapi_client
+                        response = client.start_web_call(st.session_state.voice_assistant_id)
+                        st.session_state.active_call_id = response.get("id")
+                        join_url = response.get("joinUrl")
+                        if join_url:
+                            st.markdown(f"[🔗 Join Call]({join_url})")
+                        st.success("Call started!")
+                    except VapiError as e:
+                        st.error(f"Failed to start call: {e}")
+
+            with call_cols[1]:
+                if st.button("⏹ End Call", use_container_width=True):
+                    if st.session_state.active_call_id:
+                        try:
+                            client = st.session_state.vapi_client
+                            client.end_call(st.session_state.active_call_id)
+                            st.success("Call ended!")
+                            st.session_state.active_call_id = None
+                        except VapiError as e:
+                            st.error(f"Failed to end call: {e}")
+                    else:
+                        st.warning("No active call")
+
+            if st.button("🔄 Refresh Status", use_container_width=True):
+                if st.session_state.active_call_id:
+                    try:
+                        client = st.session_state.vapi_client
+                        call_data = client.get_call(st.session_state.active_call_id)
+                        status = call_data.get("status", "unknown")
+                        duration = call_data.get("duration", 0)
+                        st.success(f"Status: {status}, Duration: {duration}s")
+                    except VapiError as e:
+                        st.error(f"Failed to get status: {e}")
+                else:
+                    st.info("No active call")
+        else:
+            st.info("Create an assistant first")
+
+    st.markdown("---")
+    st.markdown("#### 📋 Call History")
+
+    try:
+        client = st.session_state.vapi_client
+        calls = client.list_calls(limit=10)
+
+        if calls:
+            call_data = []
+            for call in calls:
+                call_data.append({
+                    "Call ID": call.get("id", "")[:20] + "...",
+                    "Status": call.get("status", "unknown"),
+                    "Duration": f"{call.get('duration', 0)}s",
+                    "Started": call.get("startedAt", "")[:19],
+                })
+
+            st.dataframe(call_data, use_container_width=True, hide_index=True)
+        else:
+            st.info("No previous calls")
+
+    except VapiError as e:
+        st.error(f"Failed to load call history: {e}")
+
+
 def render_batch_test_tab() -> None:
     """Render the batch query tester tab."""
     st.markdown("### 🧪 Batch Query Tester")
@@ -863,19 +990,22 @@ def render_main_content() -> None:
         st.info("💡 Run evals to see live accuracy scores.")
         st.markdown("---")
     
-    tab1, tab2, tab3, tab4 = st.tabs(["🔍 Analyzer", "📊 Analytics", "📋 Evals", "🧪 Batch Test"])
-    
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["🔍 Analyzer", "📊 Analytics", "📋 Evals", "🧪 Batch Test", "🎤 Voice Agent"])
+
     with tab1:
         render_analyzer_tab()
-    
+
     with tab2:
         render_analytics_dashboard()
-    
+
     with tab3:
         render_evals_tab()
-    
+
     with tab4:
         render_batch_test_tab()
+
+    with tab5:
+        render_voice_agent_tab()
 
 
 def main() -> None:

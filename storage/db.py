@@ -60,7 +60,21 @@ class Database:
                 total_cost_usd REAL NOT NULL DEFAULT 0
             )
         """)
-        
+
+        await self._connection.execute("""
+            CREATE TABLE IF NOT EXISTS voice_calls (
+                call_id TEXT PRIMARY KEY,
+                transcript TEXT,
+                category TEXT,
+                sentiment TEXT,
+                priority TEXT,
+                should_escalate INTEGER,
+                ai_response TEXT,
+                duration_seconds INTEGER,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         await self._connection.commit()
         
     async def close(self) -> None:
@@ -204,13 +218,116 @@ class Database:
             rows = await cursor.fetchall()
             
         return [
-            {
+{
                 "date": r["date"],
                 "query_count": r["query_count"],
-                "avg_latency_ms": r["avg_latency"]
+                "avg_latency_ms": r["avg_latency_ms"]
             }
             for r in rows
         ]
+
+    async def save_voice_call(
+        self,
+        call_id: str,
+        transcript: str,
+        category: str,
+        sentiment: str,
+        priority: str,
+        should_escalate: bool,
+        ai_response: str,
+        duration_seconds: int,
+    ) -> None:
+        """Save a voice call result.
+
+        Args:
+            call_id: Vapi call ID
+            transcript: Voice transcript
+            category: Category classification
+            sentiment: Sentiment analysis
+            priority: Priority level
+            should_escalate: Whether to escalate
+            ai_response: AI response text
+            duration_seconds: Call duration in seconds
+        """
+        timestamp = datetime.now().isoformat()
+
+        await self._connection.execute(
+            """
+            INSERT OR REPLACE INTO voice_calls
+            (call_id, transcript, category, sentiment, priority,
+             should_escalate, ai_response, duration_seconds, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (call_id, transcript, category, sentiment, priority,
+             int(should_escalate), ai_response, duration_seconds, timestamp)
+        )
+
+        await self._connection.commit()
+        logger.debug(f"Saved voice call: {call_id}")
+
+    async def get_voice_calls(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """Get recent voice calls.
+
+        Args:
+            limit: Maximum number of calls to return
+
+        Returns:
+            List of voice call dicts
+        """
+        async with self._connection.execute(
+            """
+            SELECT * FROM voice_calls
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (limit,)
+        ) as cursor:
+            rows = await cursor.fetchall()
+
+        return [
+            {
+                "call_id": r["call_id"],
+                "transcript": r["transcript"],
+                "category": r["category"],
+                "sentiment": r["sentiment"],
+                "priority": r["priority"],
+                "should_escalate": bool(r["should_escalate"]),
+                "ai_response": r["ai_response"],
+                "duration_seconds": r["duration_seconds"],
+                "created_at": r["created_at"],
+            }
+            for r in rows
+        ]
+
+    async def get_voice_call(self, call_id: str) -> Optional[Dict[str, Any]]:
+        """Get a specific voice call.
+
+        Args:
+            call_id: Call ID
+
+        Returns:
+            Voice call dict or None
+        """
+        async with self._connection.execute(
+            "SELECT * FROM voice_calls WHERE call_id = ?",
+            (call_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+
+        if not row:
+            return None
+
+        return {
+            "call_id": row["call_id"],
+            "transcript": row["transcript"],
+            "category": row["category"],
+            "sentiment": row["sentiment"],
+            "priority": row["priority"],
+            "should_escalate": bool(row["should_escalate"]),
+            "ai_response": row["ai_response"],
+            "duration_seconds": row["duration_seconds"],
+            "created_at": row["created_at"],
+        }
 
 
 _db_instance: Optional[Database] = None

@@ -13,6 +13,30 @@ Production-grade intelligent customer support system built with **LangGraph**, *
 | **Parallel Eval Execution** | Async evaluation with Semaphore(5) for concurrent benchmark runs |
 | **Multilingual Support** | Hindi, Spanish, French, German query examples |
 | **Batch Testing** | CSV export with progress bar for bulk query analysis |
+| **Voice Agent** | Vapi integration for voice-based customer support |
+
+## 🎤 Voice Agent (Vapi Integration)
+
+Talk to the AI support agent using your voice.
+
+### Setup
+1. Get Vapi API key: https://dashboard.vapi.ai
+2. Add `VAPI_API_KEY=...` to your `.env`
+3. (Optional) Start webhook server: `python -m voice.vapi_webhook`
+4. Go to the "🎤 Voice Agent" tab in Streamlit
+
+### How It Works
+1. Vapi handles STT (Deepgram Nova-2) → LLM (Gemini Flash) → TTS (ElevenLabs)
+2. After call ends, transcript is automatically processed by LangGraph pipeline
+3. Full analysis: category, sentiment, priority, escalation, AI response
+4. Results stored in SQLite and shown in the Voice Agent tab
+
+### Architecture
+```
+Voice Call → Vapi STT → Gemini Voice Agent → Vapi TTS
+                              ↓ (post-call)
+          Transcript → LangGraph Pipeline → ChromaDB RAG → Analysis Result
+```
 
 ## Eval Results
 
@@ -72,17 +96,25 @@ ai-customer-query-analyser/
 ├── rag/
 │   ├── __init__.py
 │   └── store.py              # ChromaDB + 33 articles
+├── voice/                    # Vapi Voice Agent
+│   ├── __init__.py
+│   ├── vapi_client.py
+│   ├── vapi_assistant_config.py
+│   ├── vapi_webhook.py
+│   └── transcript_processor.py
 ├── evals/
 │   ├── __init__.py
 │   ├── runner.py             # Async parallel evals
 │   └── cli.py
 ├── knowledge_base/
 │   └── support_articles.jsonl # 33 articles
+├── storage/
+│   └── db.py              # SQLite with voice_calls table
 ├── utils/
 │   ├── __init__.py
 │   ├── llm.py
 │   └── prompt_templates.py
-├── app.py                    # Streamlit UI (9 upgrades)
+├── app.py                    # Streamlit UI with Voice Agent tab
 ├── requirements.txt
 ├── .env
 └── README.md
