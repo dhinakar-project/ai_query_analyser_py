@@ -194,11 +194,13 @@ def get_priority_emoji(priority: str) -> str:
     return emojis.get(priority, "⚪")
 
 
-async def run_analysis_streaming(query: str, preferred_language: str = "English") -> Dict[str, Any]:
+async def run_analysis_streaming(query: str, thread_id: str, preferred_language: str = "English") -> Dict[str, Any]:
     """Run analysis with streaming response.
     
     Args:
         query: The customer query to analyze.
+        thread_id: Thread ID for conversation persistence.
+        preferred_language: Preferred response language.
     
     Returns:
         Dictionary containing all analysis results.
@@ -207,7 +209,7 @@ async def run_analysis_streaming(query: str, preferred_language: str = "English"
     
     result = await run_graph(
         query,
-        thread_id=st.session_state.thread_id,
+        thread_id=thread_id,
         preferred_language=preferred_language
     )
     
@@ -493,7 +495,7 @@ def render_analyzer_tab() -> None:
         with st.spinner("🔄 Analyzing your query with AI agents..."):
             try:
                 result = run_async_in_thread(
-                    run_analysis_streaming(query, st.session_state.response_language)
+                    run_analysis_streaming(query, st.session_state.thread_id, st.session_state.response_language)
                 )
                 
                 entry = {
