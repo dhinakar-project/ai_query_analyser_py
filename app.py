@@ -453,6 +453,15 @@ def export_history_csv() -> str:
 
 def render_analyzer_tab() -> None:
     """Render the query analyzer tab."""
+    if "thread_id" not in st.session_state:
+        st.session_state.thread_id = str(uuid.uuid4())
+    if "response_language" not in st.session_state:
+        st.session_state.response_language = "English"
+    if "history" not in st.session_state:
+        st.session_state.history = []
+    if "session_cost" not in st.session_state:
+        st.session_state.session_cost = 0.0
+    
     query = st.text_area(
         "Enter your customer query:",
         placeholder="e.g., My bill seems incorrect this month. I've been charged twice for the same item.",
