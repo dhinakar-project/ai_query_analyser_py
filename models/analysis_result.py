@@ -231,3 +231,51 @@ class Article(BaseModel):
     content: str = Field(description="Full content of the support article")
     
     tags: list[str] = Field(default_factory=list, description="List of tags for the article")
+
+
+class CombinedAnalysis(BaseModel):
+    """Single-call structured output replacing all individual analysis nodes."""
+
+    language: str = Field(description="Full name of detected language e.g. English, Hindi")
+    language_code: str = Field(description="ISO 639-1 code e.g. en, hi, es")
+
+    category: Literal[
+        "Billing",
+        "Technical Support",
+        "Returns & Refunds",
+        "Shipping & Delivery",
+        "Account Management",
+        "General Inquiry"
+    ] = Field(description="Query category")
+
+    category_confidence: int = Field(ge=0, le=100, description="Confidence 0-100")
+
+    sentiment: Literal[
+        "Positive", "Neutral", "Negative", "Urgent", "Frustrated"
+    ] = Field(description="Emotional tone")
+
+    sentiment_confidence: int = Field(ge=0, le=100, description="Confidence 0-100")
+
+    priority: Literal["Critical", "High", "Medium", "Low"] = Field(
+        description="Urgency level"
+    )
+
+    should_escalate: bool = Field(description="Whether human escalation is needed")
+
+    escalation_reason: Optional[str] = Field(
+        default=None,
+        description="Why escalation is needed, null if should_escalate is false"
+    )
+
+    suggested_team: Optional[str] = Field(
+        default=None,
+        description="Team to escalate to e.g. Billing Team, Technical Support Team"
+    )
+
+    category_reasoning: str = Field(
+        description="One sentence explaining the category choice"
+    )
+
+    sentiment_reasoning: str = Field(
+        description="One sentence explaining the sentiment choice"
+    )
