@@ -2,9 +2,32 @@
 
 import re
 import logging
-from typing import Tuple
+from typing import Tuple, List
 
 logger = logging.getLogger(__name__)
+
+PII_PATTERNS = {
+    "email": (
+        r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b",
+        "[REDACTED_EMAIL]"
+    ),
+    "phone": (
+        r"\b(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)?\d{3}[-.\s]?\d{4}\b",
+        "[REDACTED_PHONE]"
+    ),
+    "credit_card": (
+        r"\b(?:\d{4}[-\s]?){3}\d{4}\b",
+        "[REDACTED_CARD]"
+    ),
+    "ssn": (
+        r"\b\d{3}[-\s]?\d{2}[-\s]?\d{4}\b",
+        "[REDACTED_SSN]"
+    ),
+    "aadhaar": (
+        r"\b\d{4}[-\s]?\d{4}[-\s]?\d{4}\b",
+        "[REDACTED_AADHAAR]"
+    ),
+}
 
 PROMPT_INJECTION_PATTERNS = [
     r"ignore\s+(previous|all)\s+instructions",
@@ -158,3 +181,31 @@ def is_repetitive_query(query: str) -> bool:
         return True
     
     return False
+
+
+def redact_pii(query: str) -> Tuple[str, List[str]]:
+    """Redact personally identifiable information from a query.
+    
+    Args:
+        query: The query string to redact.
+        
+    Returns:
+        A tuple containing:
+        - redacted_query: Query with PII replaced with redaction markers
+        - redactions_applied: List of redaction types applied
+    """
+    if not query:
+        return "", []
+    
+    redacted = query
+    redactions_applied = []
+    
+    for pii_type, (pattern, replacement) in PII_PATTERNS.items():
+        if re.search(pattern, redacted, re.IGNORECASE):
+            redacted = re.sub(pattern, replacement, redacted, flags=re.IGNORECASE)
+            redactions_applied.append(pii_type)
+    
+    if redactions_applied:
+        logger.info(f"PII redactions applied: {redactions_applied}")
+    
+    return redacted, redactions_applied

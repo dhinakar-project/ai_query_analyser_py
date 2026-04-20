@@ -209,3 +209,25 @@ class LanguageDetection(BaseModel):
         le=100,
         description="Confidence score for the language detection"
     )
+
+
+class Article(BaseModel):
+    """Structured output for support article from knowledge base.
+    
+    Attributes:
+        id: Unique identifier for the article.
+        title: Title of the support article.
+        category: Category the article belongs to.
+        content: Full content of the article.
+        tags: List of tags for the article.
+    """
+    
+    id: str = Field(description="Unique identifier for the article")
+    
+    title: str = Field(description="Title of the support article")
+    
+    category: str = Field(description="Category the article belongs to")
+    
+    content: str = Field(description="Full content of the support article")
+    
+    tags: list[str] = Field(default_factory=list, description="List of tags for the article")

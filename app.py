@@ -1,37 +1,40 @@
 """AI-Based Customer Query Analyzer - Production-Grade Streamlit Application.
 
-This application implements a multi-agent GenAI system using LangChain and Google Gemini
+This application implements a multi-agent GenAI system using LangGraph and Google Gemini
 for comprehensive customer query analysis with:
-- Real LangChain ReAct agents with tool calling
-- Parallel async execution
-- Conversation memory
-- Confidence scoring
-- Priority and escalation logic
-- Analytics dashboard
+- Real LangGraph agent graph
+- RAG-based response generation
+- Streaming responses
+- Cost tracking
+- Evaluation harness
+- Persistent memory
 """
 
 import asyncio
+import json
 import logging
-import traceback
+import os
 import time
+import traceback
+import uuid
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 
-from agents import (
-    run_responder_agent,
-    get_suggested_team_for_category
-)
-from utils.guardrails import validate_query, sanitize_query
-from utils.analytics import QueryAnalytics, get_default_analytics
-from utils.combined_analyzer import run_combined_analysis
+from utils.guardrails import validate_query, sanitize_query, redact_pii
+from graph.runner import run_graph
+from observability.costs import get_session_cost, format_cost, reset_session_cost
+from evals.runner import run_evals, load_report, save_report
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+os.environ["LANGCHAIN_TRACING_V2"] = "false"
+if os.getenv("LANGCHAIN_API_KEY"):
+    os.environ["LANGCHAIN_TRACING_V2"] = "true"
 
 st.set_page_config(
     page_title="AI Customer Query Analyzer",
@@ -160,8 +163,14 @@ def init_session_state() -> None:
     """Initialize Streamlit session state variables."""
     if "history" not in st.session_state:
         st.session_state.history = []
-    if "analytics" not in st.session_state:
-        st.session_state.analytics = get_default_analytics()
+    if "thread_id" not in st.session_state:
+        st.session_state.thread_id = str(uuid.uuid4())
+    if "session_cost" not in st.session_state:
+        st.session_state.session_cost = 0.0
+    if "response_language" not in st.session_state:
+        st.session_state.response_language = "English"
+    if "last_eval_report" not in st.session_state:
+        st.session_state.last_eval_report = None
     logger.info("Session state initialized")
 
 
@@ -176,12 +185,8 @@ def get_priority_emoji(priority: str) -> str:
     return emojis.get(priority, "⚪")
 
 
-async def run_analysis(query: str) -> Dict[str, Any]:
-    """Run analysis of a customer query using combined analyzer.
-    
-    Makes 2 LLM calls:
-    1. Combined analysis (category, sentiment, priority, escalation, language)
-    2. Response generation
+async def run_analysis_streaming(query: str) -> Dict[str, Any]:
+    """Run analysis with streaming response.
     
     Args:
         query: The customer query to analyze.
@@ -191,94 +196,51 @@ async def run_analysis(query: str) -> Dict[str, Any]:
     """
     start_time_ms = int(time.time() * 1000)
     
-    analysis_result = await asyncio.to_thread(run_combined_analysis, query)
-    
-    category = analysis_result["category"]
-    sentiment = analysis_result["sentiment"]
-    priority = analysis_result["priority"]
-    confidence_category = analysis_result["category_confidence"]
-    confidence_sentiment = analysis_result["sentiment_confidence"]
-    should_escalate = analysis_result["should_escalate"]
-    escalation_reason = analysis_result["escalation_reason"]
-    suggested_team = analysis_result["suggested_team"]
-    language = analysis_result["language"]
-    
-    if not suggested_team:
-        suggested_team = get_suggested_team_for_category(category)
-    
-    language_code = language[:2].lower() if language else "en"
-    
-    response = await asyncio.to_thread(
-        run_responder_agent,
+    result = await run_graph(
         query,
-        category,
-        sentiment,
-        priority,
-        language
+        thread_id=st.session_state.thread_id,
+        preferred_language=st.session_state.response_language
     )
     
     end_time_ms = int(time.time() * 1000)
     processing_time_ms = end_time_ms - start_time_ms
     
     return {
-        "category": category,
-        "sentiment": sentiment,
-        "priority": priority,
-        "confidence_category": confidence_category,
-        "confidence_sentiment": confidence_sentiment,
-        "should_escalate": should_escalate,
-        "escalation_reason": escalation_reason,
-        "suggested_team": suggested_team,
-        "language": language,
-        "language_code": language_code,
-        "response": response,
-        "processing_time_ms": processing_time_ms
+        "category": result.get("category", "General Inquiry"),
+        "sentiment": result.get("sentiment", "Neutral"),
+        "priority": result.get("priority", "Medium"),
+        "confidence_category": result.get("confidence_category", 50),
+        "confidence_sentiment": result.get("confidence_sentiment", 50),
+        "should_escalate": result.get("should_escalate", False),
+        "escalation_reason": result.get("escalation_reason"),
+        "suggested_team": result.get("suggested_team"),
+        "language": result.get("language", "English"),
+        "response": result.get("response", ""),
+        "processing_time_ms": processing_time_ms,
+        "reasoning_trace": result.get("reasoning_trace", [])
     }
 
 
-def run_sync_analysis(query: str) -> Dict[str, Any]:
-    """Synchronous wrapper for running query analysis.
-    
-    Args:
-        query: The customer query to analyze.
-    
-    Returns:
-        Dictionary containing all analysis results.
-    """
-    try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            return loop.run_until_complete(run_analysis(query))
-        finally:
-            loop.close()
-    except RuntimeError:
-        return asyncio.run(run_analysis(query))
-
-
 def record_analytics(result: Dict[str, Any]) -> None:
-    """Record query results in analytics.
-    
-    Args:
-        result: Dictionary containing analysis results.
-    """
-    analytics: QueryAnalytics = st.session_state.analytics
-    analytics.record_query(
-        category=result["category"],
-        sentiment=result["sentiment"],
-        priority=result["priority"],
-        response_time_ms=result["processing_time_ms"],
-        should_escalate=result["should_escalate"],
-        language=result["language"]
-    )
+    """Record query results in session state."""
+    st.session_state.history.insert(0, {
+        "query": result.get("query", ""),
+        "category": result.get("category"),
+        "sentiment": result.get("sentiment"),
+        "priority": result.get("priority"),
+        "confidence_category": result.get("confidence_category"),
+        "confidence_sentiment": result.get("confidence_sentiment"),
+        "should_escalate": result.get("should_escalate"),
+        "escalation_reason": result.get("escalation_reason"),
+        "suggested_team": result.get("suggested_team"),
+        "language": result.get("language"),
+        "response": result.get("response"),
+        "time": f"{result.get('processing_time_ms', 0)} ms"
+    })
 
 
 def render_priority_badge(priority: str) -> None:
-    """Render a priority badge with color coding.
-    
-    Args:
-        priority: The priority level to display.
-    """
+    """Render a priority badge with color coding."""
     color = get_priority_color(priority)
     emoji = get_priority_emoji(priority)
     st.markdown(
@@ -290,12 +252,10 @@ def render_priority_badge(priority: str) -> None:
 
 
 def render_confidence_bars(confidence_cat: int, confidence_sent: int) -> None:
-    """Render confidence score progress bars.
+    """Render confidence score progress bars."""
+    if confidence_cat < 40:
+        st.warning("⚠️ Low confidence classification", icon="⚠️")
     
-    Args:
-        confidence_cat: Category confidence score (0-100).
-        confidence_sent: Sentiment confidence score (0-100).
-    """
     col1, col2 = st.columns(2)
     with col1:
         st.markdown("**Category Confidence**")
@@ -306,13 +266,7 @@ def render_confidence_bars(confidence_cat: int, confidence_sent: int) -> None:
 
 
 def render_escalation_alert(should_escalate: bool, reason: str, team: str) -> None:
-    """Render escalation alert if needed.
-    
-    Args:
-        should_escalate: Whether escalation is recommended.
-        reason: Reason for escalation.
-        team: Suggested team for escalation.
-    """
+    """Render escalation alert if needed."""
     if should_escalate:
         st.error(
             f"🚨 **This query requires human escalation**\n\n"
@@ -323,11 +277,7 @@ def render_escalation_alert(should_escalate: bool, reason: str, team: str) -> No
 
 
 def render_result_cards(result: Dict[str, Any]) -> None:
-    """Render the analysis result cards.
-    
-    Args:
-        result: Dictionary containing analysis results.
-    """
+    """Render the analysis result cards."""
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
@@ -369,7 +319,7 @@ def render_result_cards(result: Dict[str, Any]) -> None:
     
     with col4:
         lang = result["language"]
-        lang_code = result.get("language_code", "en")
+        lang_code = lang[:2].lower() if lang else "en"
         st.markdown(
             f'<div style="background-color: #1a1d2e; border-left: 4px solid #667eea; '
             f'border-radius: 8px; padding: 16px; text-align: center;">'
@@ -381,12 +331,7 @@ def render_result_cards(result: Dict[str, Any]) -> None:
 
 
 def render_response_card(response: str, sentiment: str) -> None:
-    """Render the AI response card.
-    
-    Args:
-        response: The generated response text.
-        sentiment: The detected sentiment for color coding.
-    """
+    """Render the AI response card."""
     color = SENTIMENT_COLORS.get(sentiment, "#667eea")
     st.markdown(
         f'<div style="background-color: #1a1d2e; border-left: 4px solid {color}; '
@@ -398,164 +343,22 @@ def render_response_card(response: str, sentiment: str) -> None:
     )
 
 
-def render_analytics_dashboard(analytics: QueryAnalytics) -> None:
-    """Render the analytics dashboard with charts and metrics.
-    
-    Args:
-        analytics: The QueryAnalytics instance.
-    """
-    summary = analytics.get_summary()
-    
-    st.markdown("### 📊 Session Summary")
-    
-    metric_cols = st.columns(4)
-    with metric_cols[0]:
-        st.metric("Total Queries", summary["total_queries"])
-    with metric_cols[1]:
-        avg_time = summary["average_response_time_ms"]
-        st.metric("Avg Response Time", f"{avg_time:.0f} ms")
-    with metric_cols[2]:
-        st.metric("Escalation Rate", f"{summary['escalation_rate']:.1f}%")
-    with metric_cols[3]:
-        most_common = summary["most_common_category"] or "N/A"
-        st.metric("Top Category", most_common)
-    
-    st.markdown("---")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.markdown("#### 📂 Category Breakdown")
-        category_data = summary["category_breakdown"]
-        if category_data:
-            df_cat = pd.DataFrame(
-                list(category_data.items()),
-                columns=["Category", "Count"]
-            )
-            fig_cat = px.bar(
-                df_cat,
-                x="Category",
-                y="Count",
-                color="Category",
-                color_discrete_map={cat: CATEGORY_INFO.get(cat, {}).get("color", "#667eea") 
-                                   for cat in df_cat["Category"]}
-            )
-            fig_cat.update_layout(
-                showlegend=False,
-                paper_bgcolor="#1a1d2e",
-                plot_bgcolor="#1a1d2e",
-                font_color="#e0e0e0"
-            )
-            st.plotly_chart(fig_cat, width='stretch')
-        else:
-            st.info("No category data yet. Analyze some queries to see statistics.")
-    
-    with col2:
-        st.markdown("#### 💬 Sentiment Distribution")
-        sentiment_data = summary["sentiment_distribution"]
-        if sentiment_data:
-            df_sent = pd.DataFrame(
-                list(sentiment_data.items()),
-                columns=["Sentiment", "Count"]
-            )
-            fig_sent = px.pie(
-                df_sent,
-                names="Sentiment",
-                values="Count",
-                color="Sentiment",
-                color_discrete_map=SENTIMENT_COLORS
-            )
-            fig_sent.update_layout(
-                paper_bgcolor="#1a1d2e",
-                font_color="#e0e0e0"
-            )
-            st.plotly_chart(fig_sent, width='stretch')
-        else:
-            st.info("No sentiment data yet. Analyze some queries to see statistics.")
-    
-    col3, col4 = st.columns(2)
-    
-    with col3:
-        st.markdown("#### ⚡ Priority Distribution")
-        priority_data = summary["priority_distribution"]
-        if priority_data:
-            df_prio = pd.DataFrame(
-                list(priority_data.items()),
-                columns=["Priority", "Count"]
-            )
-            fig_prio = px.bar(
-                df_prio,
-                x="Priority",
-                y="Count",
-                color="Priority",
-                color_discrete_map=PRIORITY_COLORS,
-                category_orders={"Priority": ["Critical", "High", "Medium", "Low"]}
-            )
-            fig_prio.update_layout(
-                showlegend=False,
-                paper_bgcolor="#1a1d2e",
-                plot_bgcolor="#1a1d2e",
-                font_color="#e0e0e0"
-            )
-            st.plotly_chart(fig_prio, width='stretch')
-        else:
-            st.info("No priority data yet. Analyze some queries to see statistics.")
-    
-    with col4:
-        st.markdown("#### 🌐 Language Distribution")
-        lang_data = summary["language_distribution"]
-        if lang_data:
-            df_lang = pd.DataFrame(
-                list(lang_data.items()),
-                columns=["Language", "Count"]
-            )
-            fig_lang = px.bar(
-                df_lang,
-                x="Language",
-                y="Count",
-                color="Language",
-                color_discrete_sequence=px.colors.qualitative.Set2
-            )
-            fig_lang.update_layout(
-                showlegend=False,
-                paper_bgcolor="#1a1d2e",
-                plot_bgcolor="#1a1d2e",
-                font_color="#e0e0e0"
-            )
-            st.plotly_chart(fig_lang, width='stretch')
-        else:
-            st.info("No language data yet. Analyze some queries to see statistics.")
-
-
-def export_history_csv() -> str:
-    """Export conversation history as CSV.
-    
-    Returns:
-        CSV-formatted string for download.
-    """
-    if not st.session_state.history:
-        return "query,category,sentiment,priority,response,time\n"
-    
-    lines = ["query,category,sentiment,priority,response,time"]
-    for entry in st.session_state.history:
-        query = entry["query"].replace('"', '""')
-        response = entry["response"].replace('"', '""')
-        priority = entry.get("priority", "Medium")
-        line = f'"{query}",{entry["category"]},{entry["sentiment"]},{priority},"{response}",{entry["time"]}'
-        lines.append(line)
-    
-    return "\n".join(lines)
+def render_reasoning_expander(reasoning_trace: List[str]) -> None:
+    """Render the reasoning trace in an expander."""
+    if reasoning_trace:
+        with st.expander("🧠 Reasoning Trace"):
+            for i, reason in enumerate(reasoning_trace):
+                st.markdown(f"**Step {i+1}:** {reason}")
 
 
 def render_sidebar() -> None:
-    """Render the sidebar with help and settings."""
+    """Render the sidebar with help, settings, and cost display."""
     with st.sidebar:
         st.markdown(
             '<div style="text-align: center; padding: 10px 0;">'
             '<h2 style="font-size: 1.8rem;">🎯 Query Analyzer</h2></div>',
             unsafe_allow_html=True
         )
-        st.markdown('<hr style="border-color: #2d3561;">', unsafe_allow_html=True)
         
         st.markdown("### 📋 Query Categories")
         for cat, info in CATEGORY_INFO.items():
@@ -565,26 +368,44 @@ def render_sidebar() -> None:
             )
         
         st.markdown("")
-        st.markdown("### 💡 Example Queries")
-        examples = [
-            "My bill seems incorrect this month.",
-            "I can't login to my account, password reset isn't working.",
-            "Where is my order? It's been 2 weeks!",
-            "I want to return a damaged product I received.",
-            "How do I upgrade my subscription plan?",
-            "Your service has been amazing, just wanted to say thanks!"
-        ]
-        for ex in examples:
-            st.markdown(f'<div style="background-color: #1a1d2e; border-left: 3px solid #667eea; '
-                       f'border-radius: 6px; padding: 8px 12px; margin: 4px 0; font-size: 0.85rem; '
-                       f'color: #e0e0e0;">🔹 {ex}</div>', unsafe_allow_html=True)
+        st.markdown("### ⚙️ Settings")
+        
+        response_lang = st.selectbox(
+            "Response Language",
+            ["English", "Hindi", "Spanish", "French", "same as query"],
+            index=["English", "Hindi", "Spanish", "French", "same as query"].index(
+                st.session_state.response_language
+            ) if st.session_state.response_language in ["English", "Hindi", "Spanish", "French", "same as query"] else 0
+        )
+        st.session_state.response_language = response_lang
+        
+        if st.button("🆕 New Thread", width='stretch'):
+            st.session_state.thread_id = str(uuid.uuid4())
+            st.session_state.history = []
+            reset_session_cost()
+            st.session_state.session_cost = 0.0
+            st.rerun()
         
         st.markdown("<hr style='border-color: #2d3561; margin-top: 20px;'>", unsafe_allow_html=True)
         
+        st.markdown("### 💰 Session Cost")
+        cost = get_session_cost()
+        st.session_state.session_cost = cost
+        st.markdown(
+            f'<div style="background-color: #1a1d2e; border-radius: 8px; padding: 16px; '
+            f'text-align: center;">'
+            f'<div style="color: #81c784; font-size: 1.5rem; font-weight: 700;">'
+            f'{format_cost(cost)}</div></div>',
+            unsafe_allow_html=True
+        )
+        
+        tracing_status = "LangSmith ✓" if os.getenv("LANGCHAIN_API_KEY") else "local"
+        st.markdown(f"**Tracing:** {tracing_status}")
+        
         if st.button("🗑️ Clear History", width='stretch'):
             st.session_state.history = []
-            if "analytics" in st.session_state:
-                st.session_state.analytics.reset()
+            reset_session_cost()
+            st.session_state.session_cost = 0.0
             st.rerun()
         
         if st.button("📥 Export as CSV", width='stretch'):
@@ -600,35 +421,25 @@ def render_sidebar() -> None:
         st.markdown("<hr style='border-color: #2d3561; margin-top: 20px;'>", unsafe_allow_html=True)
         st.markdown(
             '<div style="text-align: center; color: #718096; font-size: 0.75rem;">'
-            'Built with LangChain · Gemini 2.5 · Streamlit</div>',
+            'Built with LangGraph · Gemini 2.5 · Streamlit</div>',
             unsafe_allow_html=True
         )
 
 
-def render_main_content() -> None:
-    """Render the main content area with tabs."""
-    st.markdown(
-        '<h1 style="text-align: center; font-size: 2.4rem; font-weight: 800; '
-        'background: linear-gradient(90deg, #667eea 0%, #764ba2 50%, #f64f59 100%); '
-        '-webkit-background-clip: text; -webkit-text-fill-color: transparent; '
-        'background-clip: text; margin-bottom: 0.5rem;">AI Customer Query Analyzer</h1>',
-        unsafe_allow_html=True
-    )
-    st.markdown(
-        '<p style="text-align: center; color: #a0aec0; margin-bottom: 30px;">'
-        'Powered by LangChain · Google Gemini 2.5 · Multi-Agent AI</p>',
-        unsafe_allow_html=True
-    )
-    st.markdown('<hr style="border-color: #2d3561;">', unsafe_allow_html=True)
+def export_history_csv() -> str:
+    """Export conversation history as CSV."""
+    if not st.session_state.history:
+        return "query,category,sentiment,priority,response,time\n"
     
-    tab1, tab2 = st.tabs(["🔍 Analyzer", "📊 Analytics"])
+    lines = ["query,category,sentiment,priority,response,time"]
+    for entry in st.session_state.history:
+        query = entry["query"].replace('"', '""') if "query" in entry else ""
+        response = entry.get("response", "").replace('"', '""')
+        priority = entry.get("priority", "Medium")
+        line = f'"{query}",{entry.get("category","")},{entry.get("sentiment","")},{priority},"{response}",{entry.get("time","")}'
+        lines.append(line)
     
-    with tab1:
-        render_analyzer_tab()
-    
-    with tab2:
-        analytics: QueryAnalytics = st.session_state.get("analytics", get_default_analytics())
-        render_analytics_dashboard(analytics)
+    return "\n".join(lines)
 
 
 def render_analyzer_tab() -> None:
@@ -654,15 +465,16 @@ def render_analyzer_tab() -> None:
             st.error(f"⚠️ {error_msg}")
             return
         
+        redacted_query, redactions = redact_pii(query)
+        if redactions:
+            st.info("ℹ️ Personal information was automatically redacted before processing.", icon="ℹ️")
+            query = redacted_query
+        
         query = sanitize_query(query)
         
         with st.spinner("🔄 Analyzing your query with AI agents..."):
-            start_time = time.time()
-            
             try:
-                result = run_sync_analysis(query)
-                
-                elapsed = time.time() - start_time
+                result = asyncio.run(run_analysis_streaming(query))
                 
                 entry = {
                     "query": query,
@@ -679,8 +491,7 @@ def render_analyzer_tab() -> None:
                     "time": f"{result['processing_time_ms']} ms"
                 }
                 
-                st.session_state.history.insert(0, entry)
-                record_analytics(result)
+                record_analytics(entry)
                 
                 st.markdown("<br>", unsafe_allow_html=True)
                 
@@ -698,6 +509,8 @@ def render_analyzer_tab() -> None:
                     result["confidence_category"],
                     result["confidence_sentiment"]
                 )
+                
+                render_reasoning_expander(result.get("reasoning_trace", []))
                 
                 st.markdown("<br>", unsafe_allow_html=True)
                 st.markdown("### 💬 AI Response")
@@ -720,12 +533,12 @@ def render_analyzer_tab() -> None:
         
         for entry in st.session_state.history[:5]:
             with st.expander(
-                f"**You:** {entry['query'][:80]}{'...' if len(entry['query']) > 80 else ''}",
+                f"**You:** {entry.get('query','')[:80]}{'...' if len(entry.get('query','')) > 80 else ''}",
                 expanded=False
             ):
                 col1, col2 = st.columns([1, 1])
                 with col1:
-                    cat = entry["category"]
+                    cat = entry.get("category", "")
                     color = CATEGORY_INFO.get(cat, {}).get("color", "#a0aec0")
                     emoji = CATEGORY_INFO.get(cat, {}).get("emoji", "💬")
                     st.markdown(
@@ -733,7 +546,7 @@ def render_analyzer_tab() -> None:
                         unsafe_allow_html=True
                     )
                 with col2:
-                    sent = entry["sentiment"]
+                    sent = entry.get("sentiment", "")
                     sent_color = SENTIMENT_COLORS.get(sent, "#a0aec0")
                     st.markdown(
                         f'<span style="color: {sent_color};">💬 {sent}</span>',
@@ -744,13 +557,150 @@ def render_analyzer_tab() -> None:
                 st.markdown(f"**Priority:** {get_priority_emoji(priority)} {priority}")
                 
                 st.markdown("---")
-                st.markdown(entry["response"])
+                st.markdown(entry.get("response", ""))
                 
                 st.markdown(
                     f'<div style="text-align: right; color: #718096; font-size: 0.75rem;">'
-                    f'⏱️ {entry["time"]}</div>',
+                    f'⏱️ {entry.get("time","")}</div>',
                     unsafe_allow_html=True
                 )
+
+
+def render_evals_tab() -> None:
+    """Render the evals dashboard tab."""
+    st.markdown("### 📋 Evaluation Results")
+    
+    report = load_report("evals/last_report.json")
+    
+    if report:
+        st.session_state.last_eval_report = report
+        
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Category Accuracy", f"{report.category_accuracy:.1%}")
+        with col2:
+            st.metric("Sentiment Accuracy", f"{report.sentiment_accuracy:.1%}")
+        with col3:
+            st.metric("Priority Accuracy", f"{report.priority_accuracy:.1%}")
+        with col4:
+            st.metric("Avg Latency", f"{report.avg_latency_ms:.0f}ms")
+        
+        st.markdown("---")
+        
+        st.markdown("### 📊 Per-Case Results")
+        
+        case_data = []
+        for result in report.case_results:
+            case_data.append({
+                "Query": result.query[:40] + "...",
+                "Category": f"{'✓' if result.category_match else '✗'} {result.actual_category}",
+                "Sentiment": f"{'✓' if result.sentiment_match else '✗'} {result.actual_sentiment}",
+                "Priority": f"{'✓' if result.priority_match else '✗'} {result.actual_priority}",
+                "Escalate": f"{'✓' if result.escalate_match else '✗'} {result.actual_escalate}"
+            })
+        
+        if case_data:
+            df = pd.DataFrame(case_data)
+            st.dataframe(df, use_container_width=True)
+        
+        st.markdown(f"*Evaluated at: {report.timestamp}*")
+    else:
+        st.info("No evaluation results yet. Run evals to see metrics.")
+    
+    st.markdown("---")
+    
+    if st.button("▶ Run Evals Now", type="primary"):
+        with st.spinner("Running evaluation on golden dataset..."):
+            report = asyncio.run(run_evals(verbose=True))
+            save_report(report)
+            st.session_state.last_eval_report = report
+            st.rerun()
+
+
+def render_analytics_dashboard() -> None:
+    """Render the analytics dashboard."""
+    if not st.session_state.history:
+        st.info("No analytics data yet. Analyze some queries to see statistics.")
+        return
+    
+    total_queries = len(st.session_state.history)
+    
+    category_counts = {}
+    sentiment_counts = {}
+    priority_counts = {}
+    
+    for entry in st.session_state.history:
+        cat = entry.get("category", "Unknown")
+        sentiment_counts[cat] = category_counts.get(cat, 0) + 1
+        
+        sent = entry.get("sentiment", "Unknown")
+        sentiment_counts[sent] = sentiment_counts.get(sent, 0) + 1
+        
+        prio = entry.get("priority", "Unknown")
+        priority_counts[prio] = priority_counts.get(prio, 0) + 1
+    
+    st.markdown("### 📊 Session Analytics")
+    
+    metric_cols = st.columns(3)
+    with metric_cols[0]:
+        st.metric("Total Queries", total_queries)
+    with metric_cols[1]:
+        avg_time = sum(int(e.get("time", "0 ms").replace(" ms", "")) for e in st.session_state.history) / total_queries if total_queries else 0
+        st.metric("Avg Response Time", f"{avg_time:.0f} ms")
+    with metric_cols[2]:
+        escalation_rate = sum(1 for e in st.session_state.history if e.get("should_escalate", False)) / total_queries * 100 if total_queries else 0
+        st.metric("Escalation Rate", f"{escalation_rate:.1f}%")
+    
+    st.markdown("---")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("#### 📂 Category Breakdown")
+        if category_counts:
+            df_cat = pd.DataFrame(list(category_counts.items()), columns=["Category", "Count"])
+            fig_cat = px.bar(
+                df_cat, x="Category", y="Count", color="Category",
+                color_discrete_map={cat: CATEGORY_INFO.get(cat, {}).get("color", "#667eea") for cat in df_cat["Category"]}
+            )
+            fig_cat.update_layout(showlegend=False, paper_bgcolor="#1a1d2e", plot_bgcolor="#1a1d2e", font_color="#e0e0e0")
+            st.plotly_chart(fig_cat, width='stretch')
+    
+    with col2:
+        st.markdown("#### 💬 Sentiment Distribution")
+        if sentiment_counts:
+            df_sent = pd.DataFrame(list(sentiment_counts.items()), columns=["Sentiment", "Count"])
+            fig_sent = px.pie(df_sent, names="Sentiment", values="Count", color="Sentiment", color_discrete_map=SENTIMENT_COLORS)
+            fig_sent.update_layout(paper_bgcolor="#1a1d2e", font_color="#e0e0e0")
+            st.plotly_chart(fig_sent, width='stretch')
+
+
+def render_main_content() -> None:
+    """Render the main content area with tabs."""
+    st.markdown(
+        '<h1 style="text-align: center; font-size: 2.4rem; font-weight: 800; '
+        'background: linear-gradient(90deg, #667eea 0%, #764ba2 50%, #f64f59 100%); '
+        '-webkit-background-clip: text; -webkit-text-fill-color: transparent; '
+        'background-clip: text; margin-bottom: 0.5rem;">AI Customer Query Analyzer</h1>',
+        unsafe_allow_html=True
+    )
+    st.markdown(
+        '<p style="text-align: center; color: #a0aec0; margin-bottom: 30px;">'
+        'Powered by LangGraph · Google Gemini 2.5 · Multi-Agent AI</p>',
+        unsafe_allow_html=True
+    )
+    st.markdown('<hr style="border-color: #2d3561;">', unsafe_allow_html=True)
+    
+    tab1, tab2, tab3 = st.tabs(["🔍 Analyzer", "📊 Analytics", "📋 Evals"])
+    
+    with tab1:
+        render_analyzer_tab()
+    
+    with tab2:
+        render_analytics_dashboard()
+    
+    with tab3:
+        render_evals_tab()
 
 
 def main() -> None:
