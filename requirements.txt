@@ -12,6 +12,6 @@ pydantic>=2.0.0
 langgraph>=0.2.0
 langgraph-checkpoint-sqlite>=1.0.0
 chromadb>=0.5.0
-sentence-transformers>=3.0.0
+onnxruntime>=1.17.0
 aiosqlite>=0.20.0
 rich>=13.0.0

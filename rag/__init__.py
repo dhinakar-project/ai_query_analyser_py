@@ -1,7 +1,6 @@
-"""RAG (Retrieval-Augmented Generation) module."""
+"""RAG package — retrieval-augmented generation for support responses."""
 
-from rag.embedder import get_embedder
 from rag.store import initialize_store, get_store
 from rag.retriever import retrieve
 
-__all__ = ["get_embedder", "initialize_store", "get_store", "retrieve"]
+__all__ = ["initialize_store", "get_store", "retrieve"]
