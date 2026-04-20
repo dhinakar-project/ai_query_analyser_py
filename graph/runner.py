@@ -9,7 +9,7 @@ from graph.state import QueryState
 logger = logging.getLogger(__name__)
 
 
-async def run_graph(query: str, thread_id: str) -> dict:
+async def run_graph(query: str, thread_id: str, preferred_language: str = "English") -> dict:
     """
     Run the compiled LangGraph pipeline for a query.
     Returns the final QueryState as a plain dict.
@@ -34,6 +34,7 @@ async def run_graph(query: str, thread_id: str) -> dict:
         "reasoning_trace": [],
         "retry_count": 0,
         "processing_time_ms": 0,
+        "preferred_language": preferred_language,
     }
 
     start = time.time()

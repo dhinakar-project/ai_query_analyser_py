@@ -37,6 +37,7 @@ class QueryState(TypedDict, total=False):
     suggested_team: Optional[str]
     language: Optional[str]
     language_code: Optional[str]
+    preferred_language: str
     response: Optional[str]
     reasoning_trace: list[str]
     retry_count: int

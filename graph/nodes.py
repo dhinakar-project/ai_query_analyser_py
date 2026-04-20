@@ -150,7 +150,7 @@ def responder_node(state: dict) -> dict:
         category=state.get("category", "General Inquiry"),
         sentiment=state.get("sentiment", "Neutral"),
         priority=state.get("priority", "Medium"),
-        language=state.get("language", "English"),
+        language=state.get("preferred_language") or state.get("language", "English"),
     )
 
     try:

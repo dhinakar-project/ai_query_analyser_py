@@ -1,8 +1,11 @@
 """Evaluation runner for query analysis."""
 
+import asyncio
+import concurrent.futures
 import json
 import logging
 import time
+import uuid
 from typing import List, Optional, Literal
 from datetime import datetime
 
@@ -11,6 +14,17 @@ from pydantic import BaseModel, Field
 from evals.golden_dataset import QueryTestCase, get_golden_dataset
 
 logger = logging.getLogger(__name__)
+
+
+def _run_graph_sync(query: str, thread_id: str) -> dict:
+    """Run the async graph synchronously in an isolated thread."""
+    from graph.runner import run_graph
+
+    def _run():
+        return asyncio.run(run_graph(query=query, thread_id=thread_id))
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        return executor.submit(_run).result()
 
 
 class CaseResult(BaseModel):
@@ -54,21 +68,12 @@ async def run_single_case(
     test_case: QueryTestCase,
     verbose: bool = False
 ) -> CaseResult:
-    """Run a single test case through the graph.
-    
-    Args:
-        test_case: The test case to evaluate.
-        verbose: Whether to print progress.
-        
-    Returns:
-        CaseResult with actual vs expected values.
-    """
-    from graph.runner import run_graph
-    
+    """Run a single test case through the graph."""
+
     start_time = time.time()
-    
+
     try:
-        result = await run_graph(test_case.query)
+        result = _run_graph_sync(test_case.query, str(uuid.uuid4()))
         
         latency_ms = int((time.time() - start_time) * 1000)
         

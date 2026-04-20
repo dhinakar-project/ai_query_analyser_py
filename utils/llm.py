@@ -45,14 +45,34 @@ def _get_api_key() -> str:
     return api_key.strip()
 
 
+def _patch_llm(llm: ChatGoogleGenerativeAI) -> ChatGoogleGenerativeAI:
+    """
+    Ensure both .model and .model_name attributes exist.
+    Newer langchain-google-genai uses .model; older code (including some
+    internal LangChain methods) reads .model_name. Patch whichever is missing.
+    """
+    if not hasattr(llm, "model_name"):
+        try:
+            object.__setattr__(llm, "model_name", llm.model)
+        except Exception:
+            pass
+    if not hasattr(llm, "model"):
+        try:
+            object.__setattr__(llm, "model", llm.model_name)
+        except Exception:
+            pass
+    return llm
+
+
 @lru_cache(maxsize=4)
 def _create_llm(model: str, temperature: float) -> ChatGoogleGenerativeAI:
     """Create and cache an LLM instance."""
-    return ChatGoogleGenerativeAI(
+    llm = ChatGoogleGenerativeAI(
         model=model,
         temperature=temperature,
         google_api_key=_get_api_key()
     )
+    return _patch_llm(llm)
 
 
 _RETRY_EXCEPTIONS = (ConnectionError, TimeoutError, OSError)

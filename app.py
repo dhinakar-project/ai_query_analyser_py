@@ -29,6 +29,15 @@ from graph.runner import run_graph
 from observability.costs import get_session_cost, format_cost, reset_session_cost
 from evals.runner import run_evals, load_report, save_report
 
+import concurrent.futures
+
+
+def run_async_in_thread(coro):
+    """Run an async coroutine safely from a sync Streamlit context."""
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(asyncio.run, coro)
+        return future.result()
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -185,7 +194,7 @@ def get_priority_emoji(priority: str) -> str:
     return emojis.get(priority, "⚪")
 
 
-async def run_analysis_streaming(query: str) -> Dict[str, Any]:
+async def run_analysis_streaming(query: str, preferred_language: str = "English") -> Dict[str, Any]:
     """Run analysis with streaming response.
     
     Args:
@@ -199,7 +208,7 @@ async def run_analysis_streaming(query: str) -> Dict[str, Any]:
     result = await run_graph(
         query,
         thread_id=st.session_state.thread_id,
-        preferred_language=st.session_state.response_language
+        preferred_language=preferred_language
     )
     
     end_time_ms = int(time.time() * 1000)
@@ -474,7 +483,9 @@ def render_analyzer_tab() -> None:
         
         with st.spinner("🔄 Analyzing your query with AI agents..."):
             try:
-                result = asyncio.run(run_analysis_streaming(query))
+                result = run_async_in_thread(
+                    run_analysis_streaming(query, st.session_state.response_language)
+                )
                 
                 entry = {
                     "query": query,
