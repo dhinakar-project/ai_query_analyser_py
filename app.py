@@ -14,6 +14,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 import traceback
 import uuid
@@ -341,25 +342,44 @@ def render_result_cards(result: Dict[str, Any]) -> None:
         )
 
 
-def render_response_card(response: str, sentiment: str) -> None:
-    """Render the AI response card."""
+def render_response_card(response: str, sentiment: str, streaming: bool = True) -> None:
+    """Render the AI response card with optional streaming."""
     color = SENTIMENT_COLORS.get(sentiment, "#667eea")
     st.markdown(
         f'<div style="background-color: #1a1d2e; border-left: 4px solid {color}; '
         f'border-radius: 8px; padding: 20px; margin: 16px 0;">'
         f'<div style="color: #667eea; font-size: 0.85rem; font-weight: 600; margin-bottom: 12px;">'
-        f'🤖 AI SUPPORT AGENT</div>'
-        f'<div style="color: #e0e0e0; font-size: 1rem; line-height: 1.6;">{response}</div></div>',
+        f'🤖 AI SUPPORT AGENT</div>',
         unsafe_allow_html=True
     )
+    
+    if streaming and response:
+        with st.empty():
+            displayed = ""
+            for word in response.split():
+                displayed += word + " "
+                st.markdown(displayed + "▌")
+                time.sleep(0.03)
+            st.markdown(displayed)
+    else:
+        st.markdown(
+            f'<div style="color: #e0e0e0; font-size: 1rem; line-height: 1.6;">{response}</div></div>',
+            unsafe_allow_html=True
+        )
 
 
 def render_reasoning_expander(reasoning_trace: List[str]) -> None:
-    """Render the reasoning trace in an expander."""
+    """Render the reasoning trace as a visual timeline."""
     if reasoning_trace:
         with st.expander("🧠 Reasoning Trace"):
             for i, reason in enumerate(reasoning_trace):
-                st.markdown(f"**Step {i+1}:** {reason}")
+                icon = "🔵" if "combined_analysis" in reason else "🟢" if "responder" in reason else "⚡"
+                time_match = re.search(r'latency=(\d+)ms', reason)
+                latency = f" · {time_match.group(1)}ms" if time_match else ""
+                st.markdown(f"{icon} **Step {i+1}**{latency}")
+                st.caption(reason)
+                if i < len(reasoning_trace) - 1:
+                    st.markdown('<br>', unsafe_allow_html=True)
 
 
 def render_sidebar() -> None:
@@ -463,6 +483,23 @@ def render_analyzer_tab() -> None:
         st.session_state.history = []
     if "session_cost" not in st.session_state:
         st.session_state.session_cost = 0.0
+    
+    # UPGRADE 4: Multilingual showcase
+    with st.expander("🌐 Try multilingual examples"):
+        cols = st.columns(4)
+        examples = [
+            ("🇮🇳 Hindi", "मेरा बिल गलत है। इस महीने मुझसे दो बार चार्ज किया गया।"),
+            ("🇪🇸 Spanish", "Mi pedido llegó dañado. Necesito un reembolso urgente."),
+            ("🇫🇷 French", "Mon compte a été bloqué. Je ne peux pas me connecter depuis 3 jours."),
+            ("🇩🇪 German", "Das Paket ist nicht angekommen. Wo ist meine Bestellung?"),
+        ]
+        for i, (lang, text) in enumerate(examples):
+            with cols[i]:
+                st.caption(lang)
+                if st.button(text[:35] + "...", key=f"eg_{i}"):
+                    st.session_state.response_language = "same as query"
+                    st.session_state.query_input = text
+                    st.rerun()
     
     query = st.text_area(
         "Enter your customer query:",
@@ -588,6 +625,91 @@ def render_analyzer_tab() -> None:
                 )
 
 
+def render_batch_test_tab() -> None:
+    """Render the batch query tester tab."""
+    st.markdown("### 🧪 Batch Query Tester")
+    st.markdown("Test multiple queries at once and see results in a table.")
+    
+    default_queries = """My bill is incorrect this month
+The app keeps crashing when I try to login
+I want to return a damaged product
+Where is my order? It's been 2 weeks
+Can you help me reset my password?
+This is the third time this issue happened!
+Thank you for your excellent service"""
+    
+    queries_text = st.text_area(
+        "Enter queries (one per line):",
+        value=default_queries,
+        height=150,
+        key="batch_queries"
+    )
+    
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        run_batch = st.button("▶ Run Batch", type="primary")
+    
+    if run_batch and queries_text:
+        queries = [q.strip() for q in queries_text.split("\n") if q.strip()]
+        total = len(queries)
+        
+        results = []
+        progress_bar = st.progress(0)
+        
+        for i, query in enumerate(queries):
+            try:
+                result = run_async_in_thread(
+                    run_analysis_streaming(query, f"batch_{i}", "English")
+                )
+                results.append({
+                    "Query": query[:50] + "..." if len(query) > 50 else query,
+                    "Category": result.get("category", ""),
+                    "Sentiment": result.get("sentiment", ""),
+                    "Priority": result.get("priority", ""),
+                    "Escalate": "✓" if result.get("should_escalate") else "✗",
+                    "Time(ms)": result.get("processing_time_ms", 0)
+                })
+            except Exception as e:
+                results.append({
+                    "Query": query[:50] + "..." if len(query) > 50 else query,
+                    "Category": "Error",
+                    "Sentiment": "Error",
+                    "Priority": "Error",
+                    "Escalate": "Error",
+                    "Time(ms)": 0
+                })
+            progress_bar.progress((i + 1) / total)
+        
+        st.markdown("### 📊 Results")
+        if results:
+            df = pd.DataFrame(results)
+            st.dataframe(df, use_container_width=True)
+            
+            csv = df.to_csv(index=False)
+            st.download_button(
+                "📥 Download Results CSV",
+                data=csv,
+                file_name=f"batch_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv"
+            )
+            
+            st.markdown("### 📈 Summary")
+            summary_col1, summary_col2, summary_col3 = st.columns(3)
+            with summary_col1:
+                cat_dist = df["Category"].value_counts()
+                fig_cat = px.bar(cat_dist, x=cat_dist.index, y=cat_dist.values, title="Categories")
+                fig_cat.update_layout(paper_bgcolor="#1a1d2e", plot_bgcolor="#1a1d2e", font_color="#e0e0e0")
+                st.plotly_chart(fig_cat, use_container_width=True)
+            with summary_col2:
+                sent_dist = df["Sentiment"].value_counts()
+                fig_sent = px.pie(sent_dist, names=sent_dist.index, values=sent_dist.values, title="Sentiments")
+                fig_sent.update_layout(paper_bgcolor="#1a1d2e", font_color="#e0e0e0")
+                st.plotly_chart(fig_sent, use_container_width=True)
+            with summary_col3:
+                avg_time = df["Time(ms)"].mean()
+                st.metric("Avg Time", f"{avg_time:.0f}ms")
+
+
 def render_evals_tab() -> None:
     """Render the evals dashboard tab."""
     st.markdown("### 📋 Evaluation Results")
@@ -653,7 +775,7 @@ def render_analytics_dashboard() -> None:
     
     for entry in st.session_state.history:
         cat = entry.get("category", "Unknown")
-        sentiment_counts[cat] = category_counts.get(cat, 0) + 1
+        category_counts[cat] = category_counts.get(cat, 0) + 1
         
         sent = entry.get("sentiment", "Unknown")
         sentiment_counts[sent] = sentiment_counts.get(sent, 0) + 1
@@ -695,6 +817,17 @@ def render_analytics_dashboard() -> None:
             fig_sent = px.pie(df_sent, names="Sentiment", values="Count", color="Sentiment", color_discrete_map=SENTIMENT_COLORS)
             fig_sent.update_layout(paper_bgcolor="#1a1d2e", font_color="#e0e0e0")
             st.plotly_chart(fig_sent, width='stretch')
+    
+    st.markdown("---")
+    
+    st.markdown("#### ⚡ Priority Distribution")
+    if priority_counts:
+        df_prio = pd.DataFrame(list(priority_counts.items()), columns=["Priority", "Count"])
+        df_prio["Priority"] = pd.Categorical(df_prio["Priority"], categories=["Critical", "High", "Medium", "Low"], ordered=True)
+        df_prio = df_prio.sort_values("Priority")
+        fig_prio = px.bar(df_prio, x="Priority", y="Count", color="Priority", color_discrete_map=PRIORITY_COLORS)
+        fig_prio.update_layout(paper_bgcolor="#1a1d2e", plot_bgcolor="#1a1d2e", font_color="#e0e0e0")
+        st.plotly_chart(fig_prio, width='stretch')
 
 
 def render_main_content() -> None:
@@ -711,9 +844,26 @@ def render_main_content() -> None:
         'Powered by LangGraph · Google Gemini 2.5 · Multi-Agent AI</p>',
         unsafe_allow_html=True
     )
-    st.markdown('<hr style="border-color: #2d3561;">', unsafe_allow_html=True)
     
-    tab1, tab2, tab3 = st.tabs(["🔍 Analyzer", "📊 Analytics", "📋 Evals"])
+    # UPGRADE 5: Eval scores on landing page
+    eval_report = load_report("evals/last_report.json")
+    if eval_report:
+        st.markdown("### 📈 Live Model Performance")
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Category Accuracy", f"{eval_report.category_accuracy:.1%}", delta="↑" if eval_report.category_accuracy > 0.8 else "↓")
+        with col2:
+            st.metric("Sentiment Accuracy", f"{eval_report.sentiment_accuracy:.1%}", delta="↑" if eval_report.sentiment_accuracy > 0.75 else "↓")
+        with col3:
+            st.metric("Priority Accuracy", f"{eval_report.priority_accuracy:.1%}", delta="↑" if eval_report.priority_accuracy > 0.8 else "↓")
+        with col4:
+            st.metric("Avg Latency", f"{eval_report.avg_latency_ms:.0f}ms", delta="-")
+        st.markdown("---")
+    else:
+        st.info("💡 Run evals to see live accuracy scores.")
+        st.markdown("---")
+    
+    tab1, tab2, tab3, tab4 = st.tabs(["🔍 Analyzer", "📊 Analytics", "📋 Evals", "🧪 Batch Test"])
     
     with tab1:
         render_analyzer_tab()
@@ -723,6 +873,9 @@ def render_main_content() -> None:
     
     with tab3:
         render_evals_tab()
+    
+    with tab4:
+        render_batch_test_tab()
 
 
 def main() -> None:

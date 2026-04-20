@@ -122,7 +122,7 @@ async def run_evals(
     dataset: Optional[List[QueryTestCase]] = None,
     verbose: bool = False
 ) -> EvalReport:
-    """Run evaluation on the golden dataset.
+    """Run evaluation on the golden dataset with parallel execution.
     
     Args:
         dataset: Optional custom dataset. Uses golden dataset if not provided.
@@ -131,20 +131,21 @@ async def run_evals(
     Returns:
         EvalReport with all metrics and per-case results.
     """
+    import asyncio
+    
     if dataset is None:
         dataset = get_golden_dataset()
     
     if verbose:
-        print(f"Running evals on {len(dataset)} test cases...")
+        print(f"Running evals on {len(dataset)} test cases with parallel execution...")
     
-    results: List[CaseResult] = []
+    sem = asyncio.Semaphore(5)
     
-    for i, test_case in enumerate(dataset):
-        if verbose:
-            print(f"[{i+1}/{len(dataset)}] ", end="")
-        
-        result = await run_single_case(test_case, verbose)
-        results.append(result)
+    async def bounded_run(tc: QueryTestCase) -> CaseResult:
+        async with sem:
+            return await run_single_case(tc, verbose)
+    
+    results = await asyncio.gather(*[bounded_run(tc) for tc in dataset])
     
     category_matches = sum(1 for r in results if r.category_match)
     sentiment_matches = sum(1 for r in results if r.sentiment_match)

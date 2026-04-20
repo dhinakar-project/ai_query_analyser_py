@@ -63,7 +63,7 @@ def get_store() -> chromadb.PersistentClient:
 
 
 def initialize_store() -> None:
-    """Initialize the vector store with articles if collection is empty."""
+    """Initialize the vector store with articles. Re-indexes if count changes."""
     global _collection
 
     client = get_store()
@@ -74,22 +74,34 @@ def initialize_store() -> None:
         metadata={"hnsw:space": "cosine"},
     )
 
-    if _collection.count() == 0:
-        logger.info("Collection empty — loading and indexing articles...")
-        articles = load_articles()
-
-        if not articles:
-            logger.warning("No articles found in knowledge base — RAG will be disabled")
-            return
-
-        _collection.add(
-            ids=[a.id for a in articles],
-            documents=[a.content for a in articles],
-            metadatas=[{"category": a.category, "title": a.title} for a in articles],
+    articles = load_articles()
+    article_count = len(articles)
+    
+    current_count = _collection.count()
+    
+    if current_count != article_count or current_count == 0:
+        logger.info(f"Re-indexing articles: {current_count} -> {article_count}")
+        
+        try:
+            client.delete_collection("support_articles")
+        except Exception:
+            pass
+            
+        _collection = client.get_or_create_collection(
+            name="support_articles",
+            embedding_function=_embedding_fn,
+            metadata={"hnsw:space": "cosine"},
         )
-        logger.info(f"Indexed {len(articles)} articles into ChromaDB")
+        
+        if articles:
+            _collection.add(
+                ids=[a.id for a in articles],
+                documents=[a.content for a in articles],
+                metadatas=[{"category": a.category, "title": a.title} for a in articles],
+            )
+            logger.info(f"Indexed {len(articles)} articles into ChromaDB")
     else:
-        logger.info(f"Collection already has {_collection.count()} articles")
+        logger.info(f"Collection already has {current_count} articles")
 
 
 def get_collection():
