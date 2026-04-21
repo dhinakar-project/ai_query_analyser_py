@@ -41,7 +41,7 @@ async def process_voice_transcript(
 
     Args:
         transcript: Raw voice transcript text
-        call_id: Vapi call ID
+        call_id: Call ID
         thread_id: Optional thread ID for LangGraph state
 
     Returns:

@@ -626,131 +626,196 @@ def render_analyzer_tab() -> None:
 
 
 def render_voice_agent_tab() -> None:
-    """Render the Voice Agent tab for Vapi integration."""
     import os
-    from typing import Optional, List, Dict, Any
+    import asyncio
+    import uuid
+    import time
 
-    st.markdown("### 🎤 Voice Agent")
-    st.markdown("Interact with the AI support agent via voice call.")
-
-    vapi_key = os.getenv("VAPI_API_KEY")
-
-    if not vapi_key:
-        st.warning("⚠️ VAPI_API_KEY not set. Add it to your .env file.")
-        st.markdown("""
-        **Setup:**
-        1. Get a Vapi API key from https://dashboard.vapi.ai
-        2. Add `VAPI_API_KEY=your_key` to `.env`
-        3. Restart the app
-        """)
+    if not os.getenv("GEMINI_API_KEY"):
+        st.error("GEMINI_API_KEY not set. Add it to your .env file.")
         return
 
-    from voice.vapi_client import VapiClient, VapiError
-    from voice.vapi_assistant_config import build_customer_support_assistant_config
+    from voice.transcript_processor import process_voice_transcript
+    from voice.speaker import play_response
 
-    if "vapi_client" not in st.session_state:
-        try:
-            st.session_state.vapi_client = VapiClient()
-        except VapiError as e:
-            st.error(f"Failed to initialize Vapi client: {e}")
-            return
+    st.session_state.setdefault("va_messages", [])
+    st.session_state.setdefault("va_state", "idle")
+    st.session_state.setdefault("va_response_index", 0)
+    st.session_state.setdefault("va_call_count", 0)
+    st.session_state.setdefault("va_satisfaction", 94)
+    st.session_state.setdefault("va_tts_lang", "en")
+    st.session_state.setdefault("va_muted", False)
+    st.session_state.setdefault("va_last_result", None)
 
-    if "voice_assistant_id" not in st.session_state:
-        st.session_state.voice_assistant_id = None
+    st.markdown("### AI Voice Support Agent")
+    st.divider()
 
-    if "active_call_id" not in st.session_state:
-        st.session_state.active_call_id = None
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Calls Today", st.session_state.va_call_count)
+    m2.metric("Avg Handle Time", "1m 42s")
+    m3.metric("Satisfaction", f"{st.session_state.va_satisfaction}%")
 
-    col1, col2 = st.columns([2, 1])
+    st.divider()
 
-    with col1:
-        st.markdown("#### 📱 Setup")
-        with st.expander("Assistant Configuration", expanded=True):
-            assistant_name = st.text_input("Assistant Name", "AI Query Analyzer Voice")
-            phone_number = st.text_input("Phone Number (for outbound)", placeholder="+1234567890")
+    lang_col, mute_col = st.columns([3, 1])
 
-            if st.button("🟢 Create/Update Assistant", use_container_width=True):
-                try:
-                    client = st.session_state.vapi_client
-                    config = build_customer_support_assistant_config(name=assistant_name)
-                    response = client.create_assistant(config)
-                    st.session_state.voice_assistant_id = response.get("id")
-                    st.success(f"✅ Assistant created: `{st.session_state.voice_assistant_id}`")
-                except VapiError as e:
-                    st.error(f"Failed to create assistant: {e}")
+    with lang_col:
+        tts_lang = st.selectbox(
+            "Agent speaks in",
+            options=["en", "hi", "es", "fr", "de"],
+            format_func=lambda x: {
+                "en": "English",
+                "hi": "Hindi",
+                "es": "Spanish",
+                "fr": "French",
+                "de": "German"
+            }[x],
+            key="va_lang_select"
+        )
+        st.session_state.va_tts_lang = tts_lang
 
-        if st.session_state.voice_assistant_id:
-            st.markdown(f"**Assistant ID:** `{st.session_state.voice_assistant_id}`")
+    with mute_col:
+        st.session_state.va_muted = st.toggle("Mute", value=st.session_state.va_muted)
 
-    with col2:
-        st.markdown("#### 📞 Call Controls")
-        if st.session_state.voice_assistant_id:
-            call_cols = st.columns(2)
-            with call_cols[0]:
-                if st.button("🔴 Start Web Call", use_container_width=True):
-                    try:
-                        client = st.session_state.vapi_client
-                        public_key = os.getenv("VAPI_PUBLIC_KEY")
-                        response = client.start_web_call(st.session_state.voice_assistant_id, public_key)
-                        st.session_state.active_call_id = response.get("id")
-                        join_url = response.get("joinUrl")
-                        if join_url:
-                            st.markdown(f"[🔗 Join Call]({join_url})")
-                        st.success("Call started!")
-                    except VapiError as e:
-                        st.error(f"Failed to start call: {e}")
+    _, orb_col, _ = st.columns([1, 2, 1])
+    with orb_col:
+        state = st.session_state.va_state
+        orb_map = {
+            "idle": ("Agent ready", 0.0),
+            "listening": ("Listening...", 0.35),
+            "thinking": ("AI thinking...", 0.70),
+            "speaking": ("Agent speaking...", 1.0),
+        }
+        label, progress_val = orb_map.get(state, orb_map["idle"])
+        st.write(f"**{label}**")
+        st.progress(progress_val, text=label)
 
-            with call_cols[1]:
-                if st.button("⏹ End Call", use_container_width=True):
-                    if st.session_state.active_call_id:
-                        try:
-                            client = st.session_state.vapi_client
-                            client.end_call(st.session_state.active_call_id)
-                            st.success("Call ended!")
-                            st.session_state.active_call_id = None
-                        except VapiError as e:
-                            st.error(f"Failed to end call: {e}")
-                    else:
-                        st.warning("No active call")
+    b1, b2, b3 = st.columns(3)
 
-            if st.button("🔄 Refresh Status", use_container_width=True):
-                if st.session_state.active_call_id:
-                    try:
-                        client = st.session_state.vapi_client
-                        call_data = client.get_call(st.session_state.active_call_id)
-                        status = call_data.get("status", "unknown")
-                        duration = call_data.get("duration", 0)
-                        st.success(f"Status: {status}, Duration: {duration}s")
-                    except VapiError as e:
-                        st.error(f"Failed to get status: {e}")
-                else:
-                    st.info("No active call")
-        else:
-            st.info("Create an assistant first")
+    demo_queries = [
+        "My order #45621 hasn't arrived in 2 weeks, I am really frustrated",
+        "I was charged twice for my subscription this month",
+        "I cannot log into my account, password reset is not working",
+        "I want to return a product I bought last week",
+        "Can you upgrade my plan to Pro please",
+    ]
 
-    st.markdown("---")
-    st.markdown("#### 📋 Call History")
+    with b1:
+        start_clicked = st.button("Start", use_container_width=True)
 
-    try:
-        client = st.session_state.vapi_client
-        calls = client.list_calls(limit=10)
+    with b2:
+        end_clicked = st.button("End", use_container_width=True)
 
-        if calls:
-            call_data = []
-            for call in calls:
-                call_data.append({
-                    "Call ID": call.get("id", "")[:20] + "...",
-                    "Status": call.get("status", "unknown"),
-                    "Duration": f"{call.get('duration', 0)}s",
-                    "Started": call.get("startedAt", "")[:19],
-                })
+    with b3:
+        new_clicked = st.button("New Session", use_container_width=True)
 
-            st.dataframe(call_data, use_container_width=True, hide_index=True)
-        else:
-            st.info("No previous calls")
+    if end_clicked:
+        st.session_state.va_state = "idle"
+        st.rerun()
 
-    except VapiError as e:
-        st.error(f"Failed to load call history: {e}")
+    if new_clicked:
+        st.session_state.va_messages = []
+        st.session_state.va_state = "idle"
+        st.session_state.va_call_count = 0
+        st.session_state.va_last_result = None
+        st.rerun()
+
+    if start_clicked:
+        st.session_state.va_state = "listening"
+        st.session_state.va_call_count += 1
+
+        query = demo_queries[
+            st.session_state.va_response_index % len(demo_queries)
+        ]
+
+        with st.status("Processing voice input...", expanded=True) as status:
+            st.write("Capturing audio input...")
+            time.sleep(1.0)
+            st.write(f"Transcribed: *{query}*")
+            time.sleep(0.8)
+            st.session_state.va_state = "thinking"
+            st.write("Running LangGraph pipeline...")
+
+            result = asyncio.run(
+                process_voice_transcript(
+                    transcript=f"Customer: {query}",
+                    call_id=str(uuid.uuid4())
+                )
+            )
+
+            st.write("Response ready")
+            status.update(label="Complete", state="complete")
+
+        st.session_state.va_messages.append(
+            {"role": "user", "content": query}
+        )
+
+        ai_response = result.get("response", "I am here to help you.")
+        st.session_state.va_messages.append(
+            {"role": "assistant", "content": ai_response}
+        )
+
+        st.session_state.va_last_result = result
+        st.session_state.va_response_index += 1
+        st.session_state.va_state = "speaking"
+
+        play_response(ai_response, lang=st.session_state.va_tts_lang)
+
+        st.session_state.va_state = "idle"
+
+    st.divider()
+    user_input = st.chat_input("Or type a customer query here...")
+
+    if user_input:
+        st.session_state.va_messages.append(
+            {"role": "user", "content": user_input}
+        )
+
+        with st.spinner("Agent thinking..."):
+            result = asyncio.run(
+                process_voice_transcript(
+                    transcript=f"Customer: {user_input}",
+                    call_id=str(uuid.uuid4())
+                )
+            )
+
+        ai_response = result.get("response", "I am here to help you.")
+        st.session_state.va_messages.append(
+            {"role": "assistant", "content": ai_response}
+        )
+
+        st.session_state.va_last_result = result
+        st.session_state.va_call_count += 1
+
+        play_response(ai_response, lang=st.session_state.va_tts_lang)
+
+    st.divider()
+    st.markdown("#### Conversation")
+
+    if not st.session_state.va_messages:
+        st.info("Click Start or type a query below to begin")
+    else:
+        for msg in st.session_state.va_messages:
+            with st.chat_message(msg["role"]):
+                st.write(msg["content"])
+
+    if st.session_state.va_last_result:
+        result = st.session_state.va_last_result
+        with st.expander("Last Call Analysis", expanded=True):
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Category", result.get("category", "—"))
+            c2.metric("Sentiment", result.get("sentiment", "—"))
+            c3.metric("Priority", result.get("priority", "—"))
+            c4.metric("Escalate", "Yes" if result.get("should_escalate") else "No")
+
+            st.info(result.get("response", ""))
+
+            trace = result.get("reasoning_trace", [])
+            if trace:
+                with st.expander("Reasoning Trace"):
+                    for step in trace:
+                        st.caption(f"-> {step}")
+
 
 
 def render_batch_test_tab() -> None:

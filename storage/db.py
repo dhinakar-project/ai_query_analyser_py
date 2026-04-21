@@ -240,7 +240,7 @@ class Database:
         """Save a voice call result.
 
         Args:
-            call_id: Vapi call ID
+            call_id: Call ID
             transcript: Voice transcript
             category: Category classification
             sentiment: Sentiment analysis
