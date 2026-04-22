@@ -74,6 +74,16 @@ class Database:
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        
+        await self._connection.execute("""
+            CREATE TABLE IF NOT EXISTS feedback (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                query_hash TEXT NOT NULL,
+                category TEXT,
+                was_helpful INTEGER NOT NULL,
+                timestamp TEXT NOT NULL
+            )
+        """)
 
         await self._connection.commit()
         
@@ -327,6 +337,26 @@ class Database:
             "ai_response": row["ai_response"],
             "duration_seconds": row["duration_seconds"],
             "created_at": row["created_at"],
+        }
+        
+    async def record_feedback(self, query_hash: str, category: str, was_helpful: bool) -> None:
+        await self._connection.execute(
+            "INSERT INTO feedback (query_hash, category, was_helpful, timestamp) VALUES (?, ?, ?, ?)",
+            (query_hash, category, int(was_helpful), datetime.now().isoformat())
+        )
+        await self._connection.commit()
+  
+    async def get_feedback_stats(self) -> dict:
+        async with self._connection.execute(
+            "SELECT COUNT(*) as total, SUM(was_helpful) as helpful FROM feedback"
+        ) as cursor:
+            row = await cursor.fetchone()
+        total = row["total"] or 0
+        helpful = row["helpful"] or 0
+        return {
+            "total_rated": total,
+            "helpful_count": helpful,
+            "helpful_rate": round((helpful / total * 100), 1) if total > 0 else 0
         }
 
 

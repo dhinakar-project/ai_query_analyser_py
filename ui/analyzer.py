@@ -354,6 +354,23 @@ def render_analyzer_tab() -> None:
                     unsafe_allow_html=True
                 )
                 
+                st.markdown("**Was this response helpful?**")
+                fb_col1, fb_col2, fb_col3 = st.columns([1, 1, 4])
+                
+                query_hash = hash(query) % 1000000  # simple hash for session
+                
+                with fb_col1:
+                    if st.button("👍 Yes", key=f"fb_yes_{query_hash}"):
+                        st.session_state[f"fb_{query_hash}"] = "helpful"
+                        st.success("Thanks for the feedback!")
+                with fb_col2:
+                    if st.button("👎 No", key=f"fb_no_{query_hash}"):
+                        st.session_state[f"fb_{query_hash}"] = "not_helpful"
+                        st.info("Thanks, we'll use this to improve.")
+                        
+                if len(st.session_state.history) > 1:
+                    st.caption("🔗 Continuing conversation thread — LangGraph memory active")
+                
             except Exception as e:
                 st.error(f"🚫 An error occurred: {str(e)}")
     

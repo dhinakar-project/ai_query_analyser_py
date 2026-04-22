@@ -24,13 +24,32 @@ def render_voice_agent_tab() -> None:
     st.session_state.setdefault("va_muted", False)
     st.session_state.setdefault("va_last_result", None)
 
-    st.markdown("### AI Voice Support Agent")
+    st.markdown("### 🔊 Text-to-Speech Support Agent")
+    st.caption("This agent analyzes your query through the full LangGraph pipeline and converts the AI response to speech using Google TTS.")
     st.divider()
 
     m1, m2, m3 = st.columns(3)
-    m1.metric("Calls Today", st.session_state.va_call_count)
-    m2.metric("Avg Handle Time", "1m 42s")
-    m3.metric("Satisfaction", f"{st.session_state.va_satisfaction}%")
+    call_count = st.session_state.va_call_count
+    m1.metric("Queries Processed", call_count)
+    
+    # Calculate avg latency from last_result history
+    if st.session_state.va_last_result:
+        last_latency = st.session_state.va_last_result.get("processing_time_ms", 0)
+        m2.metric("Last Response Time", f"{last_latency}ms")
+    else:
+        m2.metric("Last Response Time", "—")
+    
+    # Calculate real escalation rate from va_messages
+    escalated = sum(
+        1 for msg in st.session_state.get("va_messages", [])
+        if msg.get("role") == "assistant"
+    )
+    non_escalated = call_count - sum(
+        1 for msg in [st.session_state.va_last_result or {}]
+        if msg.get("should_escalate")
+    )
+    resolution_rate = (non_escalated / call_count * 100) if call_count > 0 else 0
+    m3.metric("Resolution Rate", f"{resolution_rate:.0f}%")
 
     st.divider()
 
@@ -54,116 +73,32 @@ def render_voice_agent_tab() -> None:
     with mute_col:
         st.session_state.va_muted = st.toggle("Mute", value=st.session_state.va_muted)
 
-    _, orb_col, _ = st.columns([1, 2, 1])
-    with orb_col:
-        state = st.session_state.va_state
-        orb_map = {
-            "idle": ("Agent ready", 0.0),
-            "listening": ("Listening...", 0.35),
-            "thinking": ("AI thinking...", 0.70),
-            "speaking": ("Agent speaking...", 1.0),
-        }
-        label, progress_val = orb_map.get(state, orb_map["idle"])
-        st.write(f"**{label}**")
-        st.progress(progress_val, text=label)
-
-    b1, b2, b3 = st.columns(3)
-
-    demo_queries = [
-        "My order #45621 hasn't arrived in 2 weeks, I am really frustrated",
-        "I was charged twice for my subscription this month",
-        "I cannot log into my account, password reset is not working",
-        "I want to return a product I bought last week",
-        "Can you upgrade my plan to Pro please",
-    ]
-
-    with b1:
-        start_clicked = st.button("Start", use_container_width=True)
-
-    with b2:
-        end_clicked = st.button("End", use_container_width=True)
-
-    with b3:
-        new_clicked = st.button("New Session", use_container_width=True)
-
-    if end_clicked:
-        st.session_state.va_state = "idle"
-        st.rerun()
-
-    if new_clicked:
-        st.session_state.va_messages = []
-        st.session_state.va_state = "idle"
-        st.session_state.va_call_count = 0
-        st.session_state.va_last_result = None
-        st.rerun()
-
-    if start_clicked:
-        st.session_state.va_state = "listening"
-        st.session_state.va_call_count += 1
-
-        query = demo_queries[
-            st.session_state.va_response_index % len(demo_queries)
-        ]
-
-        with st.status("Processing voice input...", expanded=True) as status:
-            st.write("Capturing audio input...")
-            time.sleep(1.0)
-            st.write(f"Transcribed: *{query}*")
-            time.sleep(0.8)
-            st.session_state.va_state = "thinking"
-            st.write("Running LangGraph pipeline...")
-
-            result = asyncio.run(
-                process_voice_transcript(
-                    transcript=f"Customer: {query}",
-                    call_id=str(uuid.uuid4())
-                )
-            )
-
-            st.write("Response ready")
-            status.update(label="Complete", state="complete")
-
-        st.session_state.va_messages.append(
-            {"role": "user", "content": query}
-        )
-
-        ai_response = result.get("response", "I am here to help you.")
-        st.session_state.va_messages.append(
-            {"role": "assistant", "content": ai_response}
-        )
-
-        st.session_state.va_last_result = result
-        st.session_state.va_response_index += 1
-        st.session_state.va_state = "speaking"
-
-        play_response(ai_response, lang=st.session_state.va_tts_lang)
-
-        st.session_state.va_state = "idle"
-
     st.divider()
-    user_input = st.chat_input("Or type a customer query here...")
 
-    if user_input:
-        st.session_state.va_messages.append(
-            {"role": "user", "content": user_input}
-        )
-
-        with st.spinner("Agent thinking..."):
+    st.markdown("### 🔊 Text-to-Speech Support Agent")
+    st.caption("Type a customer query below. The AI will analyze it and read the response aloud.")
+    
+    tts_query = st.text_input(
+        "Enter customer query:",
+        placeholder="e.g. My package hasn't arrived after 2 weeks",
+        key="tts_query_input"
+    )
+    
+    speak_clicked = st.button("🔊 Analyze & Speak Response", use_container_width=True)
+    
+    if speak_clicked and tts_query.strip():
+        with st.spinner("Analyzing and generating audio response..."):
             result = asyncio.run(
                 process_voice_transcript(
-                    transcript=f"Customer: {user_input}",
+                    transcript=f"Customer: {tts_query}",
                     call_id=str(uuid.uuid4())
                 )
             )
-
         ai_response = result.get("response", "I am here to help you.")
-        st.session_state.va_messages.append(
-            {"role": "assistant", "content": ai_response}
-        )
-
+        st.session_state.va_messages.append({"role": "user", "content": tts_query})
+        st.session_state.va_messages.append({"role": "assistant", "content": ai_response})
         st.session_state.va_last_result = result
         st.session_state.va_call_count += 1
-
         play_response(ai_response, lang=st.session_state.va_tts_lang)
 
     st.divider()

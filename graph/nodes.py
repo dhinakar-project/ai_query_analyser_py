@@ -87,9 +87,17 @@ def combined_analysis_node(state: dict) -> dict:
         llm = get_classifier_llm()
         structured_llm = llm.with_structured_output(CombinedAnalysis)
 
+        history = state.get("messages", [])
+        if history:
+            last_turn = history[-1] if history else None
+            context_prefix = f"[Prior context: {last_turn}]\n\n" if last_turn else ""
+            query_content = f"{context_prefix}Current query: {state['query']}"
+        else:
+            query_content = f"Analyse this customer query:\n\n{state['query']}"
+
         result: CombinedAnalysis = structured_llm.invoke([
             SystemMessage(content=COMBINED_ANALYSIS_SYSTEM_PROMPT),
-            HumanMessage(content=f"Analyse this customer query:\n\n{state['query']}")
+            HumanMessage(content=query_content)
         ])
 
         latency_ms = int((time.time() - start) * 1000)
@@ -138,7 +146,7 @@ def combined_analysis_node(state: dict) -> dict:
         }
 
 
-def responder_node(state: dict) -> dict:
+async def responder_node(state: dict) -> dict:
     """Generate customer-facing response using RAG."""
     from langchain_core.messages import SystemMessage, HumanMessage
     import asyncio
@@ -148,10 +156,19 @@ def responder_node(state: dict) -> dict:
 
     try:
         from rag.retriever import retrieve
-        articles = retrieve(state["query"], state.get("category", ""), k=3)
+        articles = await retrieve(state["query"], state.get("category", ""), k=3)
         rag_titles = [a.title for a in articles]
+        
+        if articles:
+            rag_context = "\n\n---\n\n".join(
+                f"[Article: {a.title}]\n{a.content}"
+                for a in articles
+            )
+        else:
+            rag_context = "No specific knowledge base articles found for this query."
     except Exception:
         rag_titles = []
+        rag_context = "No specific knowledge base articles found for this query."
 
     system_prompt = RESPONDER_SYSTEM_PROMPT_TEMPLATE.format(
         category=state.get("category", "General Inquiry"),
@@ -164,7 +181,11 @@ def responder_node(state: dict) -> dict:
         llm = get_responder_llm()
         messages = [
             SystemMessage(content=system_prompt),
-            HumanMessage(content=state["query"])
+            HumanMessage(content=(
+                f"Customer Query: {state['query']}\n\n"
+                f"Relevant Knowledge Base Context:\n{rag_context}\n\n"
+                f"Using the context above, generate a helpful and empathetic response."
+            ))
         ]
         response = llm.invoke(messages)
         response_text = response.content if hasattr(response, "content") else str(response)
@@ -176,7 +197,7 @@ def responder_node(state: dict) -> dict:
             "response": response_text,
             "rag_sources": rag_titles,
             "reasoning_trace": existing_trace + [
-                f"[responder] generated response in {latency_ms}ms"
+                f"[responder] RAG: {len(rag_titles)} articles retrieved | generated response in {latency_ms}ms"
             ]
         }
     except Exception as e:

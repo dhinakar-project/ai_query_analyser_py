@@ -17,7 +17,7 @@ from models.analysis_result import Article
 
 logger = logging.getLogger(__name__)
 
-_client: Optional[chromadb.PersistentClient] = None
+_client = None
 _collection = None
 _embedding_fn = DefaultEmbeddingFunction()
 
@@ -43,20 +43,21 @@ def load_articles() -> List[Article]:
     return articles
 
 
-def get_store() -> chromadb.PersistentClient:
-    """Get or create the ChromaDB persistent client."""
+def get_store():
+    """Get or create the ChromaDB client."""
     global _client
 
     if _client is None:
         logger.info("Initializing ChromaDB client...")
-        os.makedirs("chroma_db", exist_ok=True)
-        _client = chromadb.PersistentClient(
-            path="chroma_db",
-            settings=Settings(
-                anonymized_telemetry=False,
-                allow_reset=True,
-            ),
-        )
+        if os.getenv("STREAMLIT_CLOUD") or os.getenv("IS_CLOUD"):
+            # Streamlit Cloud uses ephemeral filesystem — use in-memory
+            _client = chromadb.Client()
+        else:
+            os.makedirs("chroma_db", exist_ok=True)
+            _client = chromadb.PersistentClient(
+                path="chroma_db",
+                settings=Settings(anonymized_telemetry=False, allow_reset=True)
+            )
         logger.info("ChromaDB client initialized")
 
     return _client

@@ -8,8 +8,25 @@ from evals.runner import run_evals, load_report, save_report
 
 def render_evals_tab() -> None:
     """Render the evals dashboard tab."""
-    st.markdown("### 📋 Evaluation Results")
+    st.markdown("### 📋 Model Evaluation")
     
+    col_run, col_info = st.columns([1, 3])
+    with col_run:
+        run_evals_clicked = st.button("▶ Run Fresh Evals", use_container_width=True, type="primary")
+    with col_info:
+        st.caption("Runs 30 test cases from the golden dataset in parallel (Semaphore=5). "
+                   "Takes ~2-3 minutes. Results vary ±3-5% due to LLM temperature.")
+    
+    if run_evals_clicked:
+        progress = st.progress(0, text="Starting evaluation...")
+        with st.spinner("Running 30 eval cases in parallel..."):
+            report = asyncio.run(run_evals(verbose=False))
+            save_report(report)
+            st.session_state.last_eval_report = report
+        progress.progress(100, text="Complete!")
+        st.success(f"Eval complete! Category accuracy: {report.category_accuracy:.1%}")
+        st.rerun()
+
     report = load_report("evals/last_report.json")
     
     if report:
@@ -44,14 +61,24 @@ def render_evals_tab() -> None:
             st.dataframe(df, use_container_width=True)
         
         st.markdown(f"*Evaluated at: {report.timestamp}*")
-    else:
         st.info("No evaluation results yet. Run evals to see metrics.")
     
     st.markdown("---")
+    st.markdown("### 👤 Human Feedback Score")
     
-    if st.button("▶ Run Evals Now", type="primary"):
-        with st.spinner("Running evaluation on golden dataset..."):
-            report = asyncio.run(run_evals(verbose=True))
-            save_report(report)
-            st.session_state.last_eval_report = report
-            st.rerun()
+    helpful_count = sum(
+        1 for k, v in st.session_state.items()
+        if k.startswith("fb_") and v == "helpful"
+    )
+    total_rated = sum(
+        1 for k in st.session_state
+        if k.startswith("fb_")
+    )
+    
+    if total_rated > 0:
+        feedback_rate = helpful_count / total_rated * 100
+        st.metric("Human Feedback Score", f"{feedback_rate:.0f}%", 
+                  delta=f"{total_rated} responses rated")
+        st.caption("Collected from user 👍/👎 ratings on generated responses")
+    else:
+        st.info("No feedback collected yet. Rate some responses in the Analyzer tab.")

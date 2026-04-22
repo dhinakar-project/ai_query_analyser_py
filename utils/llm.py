@@ -10,6 +10,9 @@ from tenacity import (
     retry_if_exception_type, before_sleep_log
 )
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.callbacks import BaseCallbackHandler
+
+from observability.costs import add_cost, calculate_cost
 
 load_dotenv()
 
@@ -18,6 +21,31 @@ _retry_logger = logging.getLogger("llm_retry")
 
 _MODEL_NAME = "gemini-2.5-flash"
 _MODEL_NAME_PRO = "gemini-2.5-flash"
+
+
+class TokenCostCallback(BaseCallbackHandler):
+    """Callback to track token usage and cost after every LLM call."""
+    
+    def on_llm_end(self, response, **kwargs):
+        try:
+            # LangChain stores token usage in response.llm_output
+            usage = response.llm_output.get("usage_metadata") or \
+                    response.llm_output.get("token_usage") or {}
+            
+            input_tokens = (
+                usage.get("input_tokens") or 
+                usage.get("prompt_tokens") or 0
+            )
+            output_tokens = (
+                usage.get("output_tokens") or 
+                usage.get("completion_tokens") or 0
+            )
+            
+            if input_tokens or output_tokens:
+                cost = calculate_cost(input_tokens, output_tokens)
+                add_cost(cost)
+        except Exception:
+            pass  # never crash the main pipeline over cost tracking
 
 
 class LLMConfigurationError(Exception):
@@ -33,15 +61,19 @@ class LLMConnectionError(Exception):
 def _get_api_key() -> str:
     """Retrieve and validate the Gemini API key from environment."""
     import os
-    api_key = os.getenv("GEMINI_API_KEY")
+    api_key = os.getenv("GEMINI_API_KEY", "")
+    
     if not api_key:
-        logger.error("GEMINI_API_KEY not found in environment variables")
+        try:
+            import streamlit as st
+            api_key = st.secrets.get("GEMINI_API_KEY", "")
+        except Exception:
+            pass
+    
+    if not api_key or not api_key.strip():
         raise LLMConfigurationError(
-            "GEMINI_API_KEY not found. Please add your API key to the .env file."
+            "GEMINI_API_KEY not found. Add it to .env or Streamlit secrets."
         )
-    if not api_key.strip():
-        logger.error("GEMINI_API_KEY is empty")
-        raise LLMConfigurationError("GEMINI_API_KEY is empty. Please provide a valid API key.")
     return api_key.strip()
 
 
@@ -70,7 +102,8 @@ def _create_llm(model: str, temperature: float) -> ChatGoogleGenerativeAI:
     llm = ChatGoogleGenerativeAI(
         model=model,
         temperature=temperature,
-        google_api_key=_get_api_key()
+        google_api_key=_get_api_key(),
+        callbacks=[TokenCostCallback()]
     )
     return _patch_llm(llm)
 

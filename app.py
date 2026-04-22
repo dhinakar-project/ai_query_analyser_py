@@ -290,7 +290,7 @@ def render_main_content() -> None:
     
     eval_report = load_report("evals/last_report.json")
     if eval_report:
-        st.markdown("### 📈 Live Model Performance")
+        st.markdown("### 📈 Last Benchmark Results")
         col1, col2, col3, col4 = st.columns(4)
         with col1:
             st.metric("Category Accuracy", f"{eval_report.category_accuracy:.1%}", delta="↑" if eval_report.category_accuracy > 0.8 else "↓")
@@ -300,12 +300,14 @@ def render_main_content() -> None:
             st.metric("Priority Accuracy", f"{eval_report.priority_accuracy:.1%}", delta="↑" if eval_report.priority_accuracy > 0.8 else "↓")
         with col4:
             st.metric("Avg Latency", f"{eval_report.avg_latency_ms:.0f}ms", delta="-")
+        
+        st.caption(f"Last run: {eval_report.timestamp} · 30 test cases · Re-run from the Evals tab")
         st.markdown("---")
     else:
         st.info("💡 Run evals to see live accuracy scores.")
         st.markdown("---")
     
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["🔍 Analyzer", "📊 Analytics", "📋 Evals", "🧪 Batch Test", "🎤 Voice Agent"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["🔍 Analyzer", "📊 Analytics", "📋 Evals", "🧪 Batch Test", "🔊 TTS Support Agent"])
 
     with tab1:
         render_analyzer_tab()
