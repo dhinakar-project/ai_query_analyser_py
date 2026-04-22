@@ -146,6 +146,13 @@ def responder_node(state: dict) -> dict:
     throttle()
     start = time.time()
 
+    try:
+        from rag.retriever import retrieve
+        articles = retrieve(state["query"], state.get("category", ""), k=3)
+        rag_titles = [a.title for a in articles]
+    except Exception:
+        rag_titles = []
+
     system_prompt = RESPONDER_SYSTEM_PROMPT_TEMPLATE.format(
         category=state.get("category", "General Inquiry"),
         sentiment=state.get("sentiment", "Neutral"),
@@ -167,6 +174,7 @@ def responder_node(state: dict) -> dict:
 
         return {
             "response": response_text,
+            "rag_sources": rag_titles,
             "reasoning_trace": existing_trace + [
                 f"[responder] generated response in {latency_ms}ms"
             ]
@@ -176,5 +184,6 @@ def responder_node(state: dict) -> dict:
         existing_trace = state.get("reasoning_trace", [])
         return {
             "response": "I'm sorry, I'm having trouble processing your request right now. Please try again in a moment or contact our support team directly.",
+            "rag_sources": rag_titles,
             "reasoning_trace": existing_trace + [f"[responder] FAILED: {str(e)}"]
         }

@@ -44,8 +44,16 @@ async def retrieve(query: str, category: str, k: int = 3) -> List[Article]:
             query_texts=[query],
             n_results=min(k, collection.count()),
             where={"category": category},
-            include=["documents", "metadatas"],
+            include=["documents", "metadatas", "distances"],
         )
+
+        logger.info(f"RAG retrieved {len(results.get('documents', [[]])[0]) if results.get('documents') else 0} articles for query: '{query[:40]}...'")
+        for i, (doc, meta, dist) in enumerate(zip(
+            results.get('documents', [[]])[0],
+            results.get('metadatas', [[]])[0],
+            results.get('distances', [[]])[0]
+        )):
+            logger.info(f"  [{i+1}] '{meta.get('title', 'Unknown')}' (distance={dist:.3f})")
 
         articles = []
         if results["documents"] and results["documents"][0]:

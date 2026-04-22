@@ -39,6 +39,7 @@ def escalation_response_node(state: QueryState) -> dict:
     existing_trace = state.get("reasoning_trace", [])
     return {
         "response": response,
+        "rag_sources": [],
         "reasoning_trace": existing_trace + [
             f"[escalation_response] fast-path used for Critical+escalate case"
         ]

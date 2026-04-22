@@ -15,6 +15,19 @@ Production-grade intelligent customer support system built with **LangGraph**, *
 | **Batch Testing** | CSV export with progress bar for bulk query analysis |
 | **Voice Agent** | AI-powered voice support with TTS response |
 
+## Demo
+
+> Run `streamlit run app.py` and open [http://localhost:8501](http://localhost:8501)
+
+**Tabs:**
+| Tab | What it shows |
+|-----|---------------|
+| Analyzer | Real-time query analysis with reasoning trace |
+| Analytics | Session-level charts (category, sentiment, priority) |
+| Evals | Golden-dataset benchmark (92.3% category accuracy) |
+| Batch Test | Bulk CSV analysis with download |
+| Voice Agent | TTS-powered support agent |
+
 ## 🎤 Voice Agent
 
 Talk to the AI support agent by typing or using the built-in voice interface.
@@ -43,27 +56,40 @@ English, Hindi, Spanish, French, German
 ## Architecture
 
 ```
-                                    ┌─────────────────────────────┐
-                                    │     Streamlit Frontend      │
-                                    │  • Main Tab / Batch Test    │
-                                    │  • Analytics Dashboard      │
-                                    │  • Eval Scores Display      │
-                                    └─────────────┬───────────────┘
-                                                  │
-                                                  ▼
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                           LangGraph StateGraph                               │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐    ┌───────────┐ │
-│  │  CLASSIFY    │───▶│   SENTIMENT  │───▶│   PRIORITY   │───▶│  RESPOND  │ │
-│  │   (Gemini)   │    │   (Gemini)   │    │   (Gemini)   │    │  (Gemini)  │ │
-│  └──────────────┘    └──────────────┘    └──────────────┘    └───────────┘ │
-│         │                   │                   │                  │       │
-│         ▼                   ▼                   ▼                  ▼       │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                    ChromaDB RAG Store                                │   │
-│  │                 (33 Support Articles)                                │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-└──────────────────────────────────────────────────────────────────────────────┘
+User Query
+    │
+    ▼
+┌─────────────────┐
+│   Guardrails    │  ← PII redaction, prompt injection detection
+│  (utils/)       │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────────────────────────────────────────┐
+│              LangGraph StateGraph                    │
+│                                                   │
+│  ┌──────────────────────────────────────────────┐  │
+│  │  combined_analysis_node  (1 LLM call)         │  │
+│  │  • Language detection                        │  │
+│  │  • Category classification + confidence     │  │
+│  │  • Sentiment analysis + confidence          │  │
+│  │  • Priority assessment                     │  │
+│  │  • Escalation decision                     │  │
+│  └──────────────┬───────────────────────────────┘  │
+│                 │                                │
+│         ┌───────┴────────┐                      │
+│         ▼                ▼                      │
+│  ┌──────────────┐  ┌───────────────────────┐    │
+│  │ escalation_  │  │   responder_node      │    │
+│  │ response     │  │   (1 LLM call)       │    │
+│  │ (0 LLM call) │  │   + ChromaDB RAG     │    │
+│  └──────────────┘  └───────────────────────┘    │
+└─────────────────────────────────────────────────────┘
+         │
+         ▼
+┌─────────────────┐
+│  Observability  │  ← SQLite logging, cost tracking, reasoning trace
+└─────────────────┘
 ```
 
 ## Project Structure
@@ -130,6 +156,14 @@ streamlit run app.py
 ```
 Opens at `http://localhost:8501`
 
+## Running Tests
+
+```bash
+pytest tests/ -v
+```
+
+Expected output: 18 tests passing.
+
 ## How It Works
 
 1. **User Query** → Streamlit input
@@ -159,7 +193,7 @@ Opens at `http://localhost:8501`
 - **Google Gemini 2.5** — LLM (Flash for speed, 0.1-0.7 temperature)
 - **ChromaDB** — Vector RAG store
 - **Streamlit** — UI framework
-- **Python 3.14** — Runtime
+- **Python 3.11+** — Runtime
 
 ## License
 

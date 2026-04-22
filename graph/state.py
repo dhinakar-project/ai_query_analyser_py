@@ -40,5 +40,6 @@ class QueryState(TypedDict, total=False):
     preferred_language: str
     response: Optional[str]
     reasoning_trace: list[str]
+    rag_sources: list[str]
     retry_count: int
     processing_time_ms: int
